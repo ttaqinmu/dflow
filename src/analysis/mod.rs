@@ -1,1 +1,931 @@
-// Reserved for the next implementation milestone.
+use crate::git::{CapturedSnapshot, SnapshotRole};
+use crate::languages::adapter_for;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LanguageId {
+    Python,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolKind {
+    Function,
+    AsyncFunction,
+    Method,
+    AsyncMethod,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub line: usize,
+    pub byte_column: usize,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceRange {
+    pub start: Position,
+    pub end: Position,
+    pub start_byte: usize,
+    pub end_byte: usize,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRef {
+    pub snapshot: SnapshotRole,
+    pub path: Vec<u8>,
+    pub range: SourceRange,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScopeKind {
+    Module,
+    Class,
+    Function,
+    Comprehension,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scope {
+    pub id: usize,
+    pub parent: Option<usize>,
+    pub name: String,
+    pub qualified_name: String,
+    pub kind: ScopeKind,
+    pub source: SourceRef,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Symbol {
+    pub language: LanguageId,
+    pub source: SourceRef,
+    pub scope_id: usize,
+    pub parent_scope: usize,
+    pub name: String,
+    pub qualified_name: String,
+    pub kind: SymbolKind,
+    pub fingerprint: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingKind {
+    Parameter,
+    Assignment,
+    Import,
+    Global,
+    Nonlocal,
+    Definition,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    pub scope_id: usize,
+    pub name: String,
+    pub kind: BindingKind,
+    pub source: SourceRef,
+    pub order: usize,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportBinding {
+    pub scope_id: usize,
+    pub module: String,
+    pub name: Option<String>,
+    pub alias: Option<String>,
+    pub relative_level: usize,
+    pub wildcard: bool,
+    pub source: SourceRef,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedCallSite {
+    pub scope_id: usize,
+    pub expression: String,
+    pub source: SourceRef,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiagnosticKind {
+    InvalidEncoding,
+    ParseError,
+    ModuleAmbiguity,
+    UnsupportedLayout,
+    DuplicateSymbol,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub kind: DiagnosticKind,
+    pub message: String,
+    pub snapshot: SnapshotRole,
+    pub path: Vec<u8>,
+    pub range: Option<SourceRange>,
+}
+#[derive(Debug, Clone)]
+pub struct ParsedFile {
+    pub path: Vec<u8>,
+    pub module: Option<String>,
+    pub language: LanguageId,
+    pub valid: bool,
+    pub scopes: Vec<Scope>,
+    pub symbols: Vec<Symbol>,
+    pub bindings: Vec<Binding>,
+    pub imports: Vec<ImportBinding>,
+    pub calls: Vec<ExtractedCallSite>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+#[derive(Debug)]
+pub struct ExtractedSnapshot {
+    pub role: SnapshotRole,
+    pub files: BTreeMap<Vec<u8>, ParsedFile>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub complete: bool,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolChangeKind {
+    Added,
+    Modified,
+    Deleted,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolChange {
+    pub kind: SymbolChangeKind,
+    pub before: Option<Symbol>,
+    pub after: Option<Symbol>,
+}
+#[derive(Debug)]
+pub struct ChangeAnalysis {
+    pub changes: Vec<SymbolChange>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub complete: bool,
+}
+
+pub fn fingerprint(parts: impl IntoIterator<Item = Vec<u8>>) -> String {
+    let mut h = Sha256::new();
+    for part in parts {
+        h.update((part.len() as u64).to_be_bytes());
+        h.update(part);
+    }
+    format!("{:x}", h.finalize())
+}
+
+pub fn extract_snapshot(snapshot: &CapturedSnapshot) -> ExtractedSnapshot {
+    let mut files = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    for (path, file) in &snapshot.files {
+        let Some(adapter) = adapter_for(path) else {
+            continue;
+        };
+        let modules = adapter.module_candidates(snapshot, path);
+        let module = if modules.len() == 1 {
+            Some(modules[0].clone())
+        } else {
+            None
+        };
+        let mut parsed = adapter.extract(file, snapshot.role, module);
+        if modules.len() > 1 {
+            parsed.diagnostics.push(Diagnostic {
+                kind: DiagnosticKind::ModuleAmbiguity,
+                message: format!("multiple module roots: {}", modules.join(", ")),
+                snapshot: snapshot.role,
+                path: path.clone(),
+                range: None,
+            });
+        } else if modules.is_empty() {
+            parsed.diagnostics.push(Diagnostic {
+                kind: DiagnosticKind::UnsupportedLayout,
+                message: "Module root could not be determined".into(),
+                snapshot: snapshot.role,
+                path: path.clone(),
+                range: None,
+            });
+        }
+        diagnostics.extend(parsed.diagnostics.clone());
+        files.insert(path.clone(), parsed);
+    }
+    let complete = files.values().all(|f| f.valid);
+    ExtractedSnapshot {
+        role: snapshot.role,
+        files,
+        diagnostics,
+        complete,
+    }
+}
+
+pub fn classify_symbols(base: &ExtractedSnapshot, target: &ExtractedSnapshot) -> ChangeAnalysis {
+    let mut changes = Vec::new();
+    let mut diagnostics = Vec::new();
+    let paths: BTreeSet<_> = base
+        .files
+        .keys()
+        .chain(target.files.keys())
+        .cloned()
+        .collect();
+    for path in paths {
+        let before = base.files.get(&path);
+        let after = target.files.get(&path);
+        if before.is_some_and(|f| !f.valid) || after.is_some_and(|f| !f.valid) {
+            continue;
+        }
+        type Key = (String, String);
+        let group = |file: Option<&ParsedFile>| -> BTreeMap<Key, Vec<Symbol>> {
+            let mut groups: BTreeMap<Key, Vec<Symbol>> = BTreeMap::new();
+            if let Some(file) = file {
+                for symbol in &file.symbols {
+                    groups
+                        .entry((symbol.qualified_name.clone(), symbol.name.clone()))
+                        .or_default()
+                        .push(symbol.clone());
+                }
+            }
+            groups
+        };
+        let b = group(before);
+        let a = group(after);
+        let keys: BTreeSet<_> = b.keys().chain(a.keys()).cloned().collect();
+        for key in keys {
+            let bs = b.get(&key).map(Vec::as_slice).unwrap_or(&[]);
+            let as_ = a.get(&key).map(Vec::as_slice).unwrap_or(&[]);
+            if bs.len() > 1 || as_.len() > 1 {
+                diagnostics.push(Diagnostic {
+                    kind: DiagnosticKind::DuplicateSymbol,
+                    message: format!("ambiguous duplicate symbol: {}", key.0),
+                    snapshot: if as_.len() > 1 {
+                        target.role
+                    } else {
+                        base.role
+                    },
+                    path: path.clone(),
+                    range: None,
+                });
+                if bs.len() > 1 && as_.len() > 1 && bs.len() == as_.len() {
+                    let same_order = bs.iter().zip(as_).all(|(before, after)| {
+                        before.fingerprint == after.fingerprint && before.kind == after.kind
+                    });
+                    if same_order {
+                        continue;
+                    }
+                    for symbol in bs {
+                        changes.push(SymbolChange {
+                            kind: SymbolChangeKind::Deleted,
+                            before: Some(symbol.clone()),
+                            after: None,
+                        });
+                    }
+                    for symbol in as_ {
+                        changes.push(SymbolChange {
+                            kind: SymbolChangeKind::Added,
+                            before: None,
+                            after: Some(symbol.clone()),
+                        });
+                    }
+                    continue;
+                }
+                let mut unmatched_after = as_.to_vec();
+                let mut unmatched_before = Vec::new();
+                for s in bs {
+                    if let Some(index) = unmatched_after
+                        .iter()
+                        .position(|a| a.fingerprint == s.fingerprint && a.kind == s.kind)
+                    {
+                        unmatched_after.remove(index);
+                    } else {
+                        unmatched_before.push(s);
+                    }
+                }
+                for s in unmatched_before {
+                    changes.push(SymbolChange {
+                        kind: SymbolChangeKind::Deleted,
+                        before: Some(s.clone()),
+                        after: None,
+                    });
+                }
+                for s in unmatched_after {
+                    changes.push(SymbolChange {
+                        kind: SymbolChangeKind::Added,
+                        before: None,
+                        after: Some(s),
+                    });
+                }
+                continue;
+            }
+            match (bs.first(), as_.first()) {
+                (Some(b), Some(a)) if b.fingerprint != a.fingerprint => {
+                    changes.push(SymbolChange {
+                        kind: SymbolChangeKind::Modified,
+                        before: Some(b.clone()),
+                        after: Some(a.clone()),
+                    })
+                }
+                (Some(b), None) => changes.push(SymbolChange {
+                    kind: SymbolChangeKind::Deleted,
+                    before: Some(b.clone()),
+                    after: None,
+                }),
+                (None, Some(a)) => changes.push(SymbolChange {
+                    kind: SymbolChangeKind::Added,
+                    before: None,
+                    after: Some(a.clone()),
+                }),
+                _ => {}
+            }
+        }
+    }
+    ChangeAnalysis {
+        changes,
+        diagnostics,
+        complete: base.complete && target.complete,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::{CapturedFile, SnapshotKind};
+    fn snapshot(role: SnapshotRole, files: &[(&[u8], &[u8])]) -> CapturedSnapshot {
+        let files = files
+            .iter()
+            .map(|(path, bytes)| {
+                (
+                    path.to_vec(),
+                    CapturedFile {
+                        path: path.to_vec(),
+                        bytes: bytes.to_vec(),
+                        mode: 0o100644,
+                    },
+                )
+            })
+            .collect();
+        CapturedSnapshot {
+            kind: SnapshotKind::WorkingTree,
+            role,
+            commit_id: None,
+            branch: None,
+            files,
+            content_id: String::new(),
+        }
+    }
+    #[test]
+    fn extracts_functions_scopes_calls_and_imports() {
+        let src = include_bytes!("../../tests/fixtures/python/symbols.py");
+        let snap = snapshot(
+            SnapshotRole::Target,
+            &[
+                (b"pkg/module.py", src),
+                (b"pkg/__init__.py", b""),
+                (b"pkg/tools.py", b""),
+            ],
+        );
+        let result = extract_snapshot(&snap);
+        let file = result.files.get(b"pkg/module.py".as_slice()).unwrap();
+        assert!(file.valid);
+        assert_eq!(file.module.as_deref(), Some("pkg.module"));
+        let names: Vec<_> = file
+            .symbols
+            .iter()
+            .map(|s| s.qualified_name.as_str())
+            .collect();
+        assert_eq!(names, ["process", "process.inner", "process.Local.method"]);
+        assert_eq!(file.symbols[0].kind, SymbolKind::AsyncFunction);
+        assert_eq!(file.symbols[2].kind, SymbolKind::Method);
+        assert_eq!(file.imports.len(), 2);
+        assert_eq!(file.imports[1].relative_level, 1);
+        assert_eq!(file.imports[1].alias.as_deref(), Some("send"));
+        let outer = file.symbols[0].parent_scope;
+        assert!(
+            file.calls
+                .iter()
+                .any(|c| c.expression == "factory" && c.scope_id == outer)
+        );
+        assert!(
+            file.calls
+                .iter()
+                .any(|c| c.expression == "default_call" && c.scope_id == outer)
+        );
+        assert!(
+            file.calls
+                .iter()
+                .any(|c| c.expression == "inner" && c.scope_id == file.symbols[2].scope_id)
+        );
+    }
+    #[test]
+    fn formatting_and_comments_do_not_change_symbol() {
+        let before = snapshot(
+            SnapshotRole::Base,
+            &[(b"a.py", b"def f():\n    # comment\n    return 1\n")],
+        );
+        let after = snapshot(
+            SnapshotRole::Target,
+            &[(b"a.py", b"def f( ):\n\n    return 1 # other\n")],
+        );
+        let changes = classify_symbols(&extract_snapshot(&before), &extract_snapshot(&after));
+        assert!(changes.changes.is_empty());
+    }
+    #[test]
+    fn literal_and_nested_body_changes_are_detected() {
+        let before = snapshot(
+            SnapshotRole::Base,
+            &[(
+                b"a.py",
+                b"def outer():\n    def inner():\n        return 1\n",
+            )],
+        );
+        let after = snapshot(
+            SnapshotRole::Target,
+            &[(
+                b"a.py",
+                b"def outer():\n    def inner():\n        return 2\n",
+            )],
+        );
+        let changes = classify_symbols(&extract_snapshot(&before), &extract_snapshot(&after));
+        assert_eq!(changes.changes.len(), 2);
+        assert!(
+            changes
+                .changes
+                .iter()
+                .all(|c| c.kind == SymbolChangeKind::Modified)
+        );
+    }
+    #[test]
+    fn broken_source_does_not_fabricate_deletions() {
+        let before = snapshot(SnapshotRole::Base, &[(b"a.py", b"def kept():\n    pass\n")]);
+        let after = snapshot(
+            SnapshotRole::Target,
+            &[(b"a.py", b"def kept(:\n    pass\n")],
+        );
+        let target = extract_snapshot(&after);
+        assert!(!target.complete);
+        assert!(
+            target
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::ParseError)
+        );
+        let changes = classify_symbols(&extract_snapshot(&before), &target);
+        assert!(!changes.complete);
+        assert!(changes.changes.is_empty());
+    }
+    #[test]
+    fn encoding_and_module_layout_are_explicit() {
+        let snap = snapshot(
+            SnapshotRole::Target,
+            &[
+                (b"src/pkg/__init__.py", b""),
+                (b"src/pkg/m.py", b"\xef\xbb\xbfdef f():\n    pass\n"),
+                (b"bad.py", b"\xff"),
+            ],
+        );
+        let result = extract_snapshot(&snap);
+        assert_eq!(
+            result
+                .files
+                .get(b"src/pkg/m.py".as_slice())
+                .unwrap()
+                .module
+                .as_deref(),
+            Some("pkg.m")
+        );
+        assert!(result.files.get(b"src/pkg/m.py".as_slice()).unwrap().valid);
+        assert!(!result.files.get(b"bad.py".as_slice()).unwrap().valid);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::InvalidEncoding)
+        );
+    }
+    #[test]
+    fn classifies_added_deleted_and_unchanged_files() {
+        let base = snapshot(
+            SnapshotRole::Base,
+            &[
+                (b"old.py", b"def removed():\n    pass\n"),
+                (b"same.py", b"def kept():\n    pass\n"),
+            ],
+        );
+        let target = snapshot(
+            SnapshotRole::Target,
+            &[
+                (b"new.py", b"def added():\n    pass\n"),
+                (b"same.py", b"def kept():\n    pass\n"),
+            ],
+        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
+        assert_eq!(result.changes.len(), 2);
+        assert_eq!(result.changes[0].kind, SymbolChangeKind::Added);
+        assert_eq!(result.changes[1].kind, SymbolChangeKind::Deleted);
+    }
+    #[test]
+    fn import_only_change_does_not_modify_function() {
+        let base = snapshot(
+            SnapshotRole::Base,
+            &[(b"a.py", b"import old\ndef f():\n    return 1\n")],
+        );
+        let target = snapshot(
+            SnapshotRole::Target,
+            &[(b"a.py", b"import new\ndef f():\n    return 1\n")],
+        );
+        assert!(
+            classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target))
+                .changes
+                .is_empty()
+        );
+    }
+    #[test]
+    fn bindings_and_call_ranges_are_retained() {
+        let src = "def outer(π):\n    global x\n    local = helper(π)\n    return local\n";
+        let snap = snapshot(SnapshotRole::Target, &[(b"a.py", src.as_bytes())]);
+        let result = extract_snapshot(&snap);
+        let file = result.files.get(b"a.py".as_slice()).unwrap();
+        assert!(
+            file.bindings
+                .iter()
+                .any(|b| b.name == "π" && b.kind == BindingKind::Parameter)
+        );
+        assert!(
+            file.bindings
+                .iter()
+                .any(|b| b.name == "x" && b.kind == BindingKind::Global)
+        );
+        assert!(
+            file.bindings
+                .iter()
+                .any(|b| b.name == "local" && b.kind == BindingKind::Assignment)
+        );
+        let call = file
+            .calls
+            .iter()
+            .find(|c| c.expression == "helper")
+            .unwrap();
+        assert_eq!(call.source.range.start.line, 3);
+        assert_eq!(call.source.range.start.byte_column, 13);
+    }
+    #[test]
+    fn duplicate_definition_is_ambiguous() {
+        let base = snapshot(
+            SnapshotRole::Base,
+            &[(b"a.py", b"def f(): pass\ndef f(): pass\n")],
+        );
+        let target = snapshot(SnapshotRole::Target, &[(b"a.py", b"def f(): pass\n")]);
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::DuplicateSymbol)
+        );
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].kind, SymbolChangeKind::Deleted);
+    }
+    #[test]
+    fn unchanged_duplicate_definitions_have_no_changes() {
+        let source = b"def f(): return 1\ndef f(): return 2\n";
+        let base = snapshot(SnapshotRole::Base, &[(b"a.py", source)]);
+        let target = snapshot(SnapshotRole::Target, &[(b"a.py", source)]);
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
+        assert!(result.changes.is_empty());
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::DuplicateSymbol)
+        );
+    }
+    #[test]
+    fn imports_follow_syntax_nodes_and_preserve_relative_members() {
+        let source = b"from . import foo\nfrom pkg import\tbar as baz\nfrom pkg import(\n    qux, # ignored\n    zip as zap,\n)\nimport alpha.beta as ab, gamma\n";
+        let snap = snapshot(SnapshotRole::Target, &[(b"a.py", source)]);
+        let result = extract_snapshot(&snap);
+        let file = result.files.get(b"a.py".as_slice()).unwrap();
+        assert!(file.valid);
+        assert_eq!(file.imports.len(), 6);
+        assert_eq!(
+            (
+                file.imports[0].module.as_str(),
+                file.imports[0].name.as_deref(),
+                file.imports[0].relative_level
+            ),
+            ("", Some("foo"), 1)
+        );
+        assert_eq!(
+            (
+                file.imports[1].module.as_str(),
+                file.imports[1].name.as_deref(),
+                file.imports[1].alias.as_deref()
+            ),
+            ("pkg", Some("bar"), Some("baz"))
+        );
+        assert_eq!(file.imports[2].name.as_deref(), Some("qux"));
+        assert_eq!(file.imports[3].name.as_deref(), Some("zip"));
+        assert_eq!(file.imports[4].module, "alpha.beta");
+        assert_eq!(file.imports[4].alias.as_deref(), Some("ab"));
+        assert!(
+            file.bindings
+                .iter()
+                .any(|b| b.name == "foo" && b.kind == BindingKind::Import)
+        );
+        assert!(!file.bindings.iter().any(|b| b.name.contains("ignored")));
+    }
+    #[test]
+    fn loop_targets_bind_in_containing_scope() {
+        let source =
+            b"def f(): pass\ndef outer(values):\n    for f, (x, y) in values:\n        f()\n";
+        let snap = snapshot(SnapshotRole::Target, &[(b"a.py", source)]);
+        let result = extract_snapshot(&snap);
+        let file = result.files.get(b"a.py".as_slice()).unwrap();
+        let outer = file.symbols.iter().find(|s| s.name == "outer").unwrap();
+        for name in ["f", "x", "y"] {
+            assert!(file.bindings.iter().any(|b| b.scope_id == outer.scope_id
+                && b.name == name
+                && b.kind == BindingKind::Assignment));
+        }
+    }
+    #[test]
+    fn attribute_write_does_not_bind_receiver() {
+        let snap = snapshot(
+            SnapshotRole::Target,
+            &[(
+                b"a.py",
+                b"def f(obj):\n    obj.field = 1\n    x, y = pair()\n",
+            )],
+        );
+        let result = extract_snapshot(&snap);
+        let file = result.files.get(b"a.py".as_slice()).unwrap();
+        assert_eq!(file.bindings.iter().filter(|b| b.name == "obj").count(), 1);
+        assert!(
+            file.bindings
+                .iter()
+                .any(|b| b.name == "x" && b.kind == BindingKind::Assignment)
+        );
+        assert!(
+            file.bindings
+                .iter()
+                .any(|b| b.name == "y" && b.kind == BindingKind::Assignment)
+        );
+    }
+    #[test]
+    fn static_pyproject_source_root_resolves_ambiguity() {
+        let code = b"def f(): pass\n";
+        let files: &[(&[u8], &[u8])] = &[
+            (b"src/__init__.py", b""),
+            (b"src/pkg/__init__.py", b""),
+            (b"src/pkg/m.py", code),
+        ];
+        let ambiguous = extract_snapshot(&snapshot(SnapshotRole::Target, files));
+        assert!(
+            ambiguous
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::ModuleAmbiguity)
+        );
+        let configured = snapshot(
+            SnapshotRole::Target,
+            &[
+                (
+                    b"pyproject.toml",
+                    b"[tool.setuptools.package-dir]\n\"\" = \"src\"\n",
+                ),
+                (b"src/__init__.py", b""),
+                (b"src/pkg/__init__.py", b""),
+                (b"src/pkg/m.py", code),
+            ],
+        );
+        let resolved = extract_snapshot(&configured);
+        assert_eq!(
+            resolved
+                .files
+                .get(b"src/pkg/m.py".as_slice())
+                .unwrap()
+                .module
+                .as_deref(),
+            Some("pkg.m")
+        );
+        assert!(
+            !resolved
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::ModuleAmbiguity)
+        );
+    }
+    #[test]
+    fn unsupported_custom_source_root_stays_unresolved() {
+        let snap = snapshot(
+            SnapshotRole::Target,
+            &[
+                (
+                    b"pyproject.toml",
+                    b"[tool.setuptools.package-dir]\n\"\" = \"lib\"\n",
+                ),
+                (b"lib/pkg/__init__.py", b""),
+                (b"lib/pkg/m.py", b"def f(): pass\n"),
+            ],
+        );
+        let result = extract_snapshot(&snap);
+        assert!(
+            result
+                .files
+                .get(b"lib/pkg/m.py".as_slice())
+                .unwrap()
+                .module
+                .is_none()
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::UnsupportedLayout)
+        );
+    }
+    #[test]
+    fn deleted_package_marker_changes_module_identity() {
+        let base = snapshot(
+            SnapshotRole::Base,
+            &[(b"pkg/__init__.py", b""), (b"pkg/m.py", b"def f(): pass\n")],
+        );
+        let target = snapshot(SnapshotRole::Target, &[(b"pkg/m.py", b"def f(): pass\n")]);
+        assert_eq!(
+            extract_snapshot(&base)
+                .files
+                .get(b"pkg/m.py".as_slice())
+                .unwrap()
+                .module
+                .as_deref(),
+            Some("pkg.m")
+        );
+        let target_result = extract_snapshot(&target);
+        assert!(
+            target_result
+                .files
+                .get(b"pkg/m.py".as_slice())
+                .unwrap()
+                .module
+                .is_none()
+        );
+        assert!(
+            target_result
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::UnsupportedLayout)
+        );
+    }
+    #[test]
+    fn with_except_walrus_and_comprehension_bindings_are_recorded() {
+        let code = b"def f(xs):\n    with acquire() as resource:\n        resource()\n    try:\n        pass\n    except Error as caught:\n        caught()\n    if (chosen := pick()):\n        chosen()\n    return [item() for item in xs]\n";
+        let snap = snapshot(SnapshotRole::Target, &[(b"a.py", code)]);
+        let result = extract_snapshot(&snap);
+        let file = result.files.get(b"a.py".as_slice()).unwrap();
+        let f = file.symbols.iter().find(|s| s.name == "f").unwrap();
+        for name in ["resource", "caught", "chosen"] {
+            assert!(
+                file.bindings.iter().any(|b| b.scope_id == f.scope_id
+                    && b.name == name
+                    && b.kind == BindingKind::Assignment),
+                "missing {name}"
+            );
+        }
+        let comprehension = file
+            .scopes
+            .iter()
+            .find(|s| s.kind == ScopeKind::Comprehension)
+            .unwrap();
+        assert!(
+            file.bindings
+                .iter()
+                .any(|b| b.scope_id == comprehension.id && b.name == "item")
+        );
+        assert!(
+            !file
+                .bindings
+                .iter()
+                .any(|b| b.scope_id == f.scope_id && b.name == "item")
+        );
+    }
+    #[test]
+    fn duplicate_reorder_is_reported_as_change() {
+        let base = snapshot(
+            SnapshotRole::Base,
+            &[(b"a.py", b"def f(): return 1\ndef f(): return 2\n")],
+        );
+        let target = snapshot(
+            SnapshotRole::Target,
+            &[(b"a.py", b"def f(): return 2\ndef f(): return 1\n")],
+        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
+        assert_eq!(result.changes.len(), 4);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::DuplicateSymbol)
+        );
+    }
+    #[test]
+    fn signature_docstring_and_multiline_ranges() {
+        let base = snapshot(
+            SnapshotRole::Base,
+            &[(b"a.py", b"def f(x):\n    \"old\"\n    return x\n")],
+        );
+        let target = snapshot(
+            SnapshotRole::Target,
+            &[(
+                b"a.py",
+                b"def f(\n    x, y\n):\n    \"new\"\n    return x\n",
+            )],
+        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].kind, SymbolChangeKind::Modified);
+        let range = result.changes[0].after.as_ref().unwrap().source.range;
+        assert_eq!(range.start.line, 1);
+        assert_eq!(range.end.line, 5);
+        assert_eq!(range.end.byte_column, 13);
+    }
+
+    #[test]
+    fn walrus_inside_comprehension_binds_in_enclosing_function() {
+        let snap = snapshot(
+            SnapshotRole::Target,
+            &[(
+                b"a.py",
+                b"def f(xs):\n    return [(chosen := item()) for item in xs]\n",
+            )],
+        );
+        let result = extract_snapshot(&snap);
+        let file = result.files.get(b"a.py".as_slice()).unwrap();
+        assert!(file.valid);
+        let f = file.symbols.iter().find(|s| s.name == "f").unwrap();
+        let comprehension = file
+            .scopes
+            .iter()
+            .find(|s| s.kind == ScopeKind::Comprehension)
+            .unwrap();
+        assert!(
+            file.bindings
+                .iter()
+                .any(|b| b.scope_id == f.scope_id && b.name == "chosen")
+        );
+        assert!(
+            file.bindings
+                .iter()
+                .any(|b| b.scope_id == comprehension.id && b.name == "item")
+        );
+    }
+    #[test]
+    fn docstring_only_change_marks_definition_modified() {
+        let base = snapshot(SnapshotRole::Base, &[(b"a.py", b"def f():\n    \"old\"\n")]);
+        let target = snapshot(
+            SnapshotRole::Target,
+            &[(b"a.py", b"def f():\n    \"new\"\n")],
+        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
+        assert_eq!(result.changes.len(), 1);
+        assert_eq!(result.changes[0].kind, SymbolChangeKind::Modified);
+    }
+
+    #[test]
+    fn decorator_change_and_unmatched_move_are_classified() {
+        let base = snapshot(SnapshotRole::Base, &[(b"old.py", b"@old\ndef f(): pass\n")]);
+        let target = snapshot(
+            SnapshotRole::Target,
+            &[(b"new.py", b"@new\ndef f(): pass\n")],
+        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
+        assert_eq!(result.changes.len(), 2);
+        assert!(
+            result
+                .changes
+                .iter()
+                .any(|c| c.kind == SymbolChangeKind::Deleted)
+        );
+        assert!(
+            result
+                .changes
+                .iter()
+                .any(|c| c.kind == SymbolChangeKind::Added)
+        );
+        let base = snapshot(SnapshotRole::Base, &[(b"a.py", b"@old\ndef f(): pass\n")]);
+        let target = snapshot(SnapshotRole::Target, &[(b"a.py", b"@new\ndef f(): pass\n")]);
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
+        assert_eq!(result.changes[0].kind, SymbolChangeKind::Modified);
+    }
+    #[test]
+    fn bom_offsets_remain_in_original_source_bytes() {
+        let snap = snapshot(
+            SnapshotRole::Target,
+            &[(b"a.py", b"\xef\xbb\xbfdef f():\n    pass\n")],
+        );
+        let result = extract_snapshot(&snap);
+        let file = result.files.get(b"a.py".as_slice()).unwrap();
+        let range = file.symbols[0].source.range;
+        assert_eq!(range.start_byte, 3);
+        assert_eq!(range.start.byte_column, 4);
+    }
+
+    #[test]
+    fn nonlocal_and_nested_class_scope_are_retained() {
+        let snap = snapshot(SnapshotRole::Target, &[(b"a.py", b"def outer():\n    x = 1\n    def inner():\n        nonlocal x\n        class Local:\n            async def method(self):\n                return x\n")]);
+        let result = extract_snapshot(&snap);
+        let file = result.files.get(b"a.py".as_slice()).unwrap();
+        let inner = file
+            .symbols
+            .iter()
+            .find(|s| s.qualified_name == "outer.inner")
+            .unwrap();
+        assert!(file.bindings.iter().any(|b| b.scope_id == inner.scope_id
+            && b.name == "x"
+            && b.kind == BindingKind::Nonlocal));
+        assert!(
+            file.symbols
+                .iter()
+                .any(|s| s.qualified_name == "outer.inner.Local.method"
+                    && s.kind == SymbolKind::AsyncMethod)
+        );
+    }
+}

@@ -4,7 +4,7 @@ DFlow is an experimental Rust tool for exploring how changes in a Git repository
 
 The goal is to answer questions such as: *Which functions call the function I changed? What calls a newly added function? Who called a function before it was deleted?* DFlow will turn those relationships into a diagram that can be used from a standalone CLI and, eventually, from Zed.
 
-> **Status:** M1 Git snapshot foundation. The root-level Rust binary crate can capture local (combined, staged, or unstaged) and branch-tip snapshots through `git2`. Python extraction, call graphs, JSON reports, and terminal diagrams are not implemented yet. The `analyze` command currently exits with code 1 after capture to avoid presenting a placeholder analysis as success. See [PRD and implementation plans](plan/README.md).
+> **Status:** M2 Python extraction foundation. The root-level Rust CLI captures local and branch-tip snapshots through `git2`, parses captured Python files with Tree-sitter, and classifies added, modified, and deleted functions. Call resolution, JSON reports, and terminal diagrams are planned. `dflow local` and `dflow branch` currently exit with code 1 after extraction because a complete impact report is not implemented. See [PRD and implementation plans](plan/README.md).
 
 ## Intended workflow
 
@@ -48,9 +48,9 @@ This is a conceptual boundary, not the current crate layout. The first implement
 
 ## Roadmap
 
-- [ ] Compare two Git snapshots and list changed Python files.
-- [ ] Extract Python functions and their source ranges.
-- [ ] Identify added, modified, and deleted symbols across snapshots.
+- [x] Compare two Git snapshots and list changed Python files.
+- [x] Extract Python functions and their source ranges.
+- [x] Identify added, modified, and deleted symbols across snapshots.
 - [ ] Build a call graph for direct, statically resolvable calls.
 - [ ] Trace callers of changed symbols, including deleted symbols in the earlier snapshot.
 - [ ] Expose a stable JSON report through the CLI.
@@ -76,8 +76,8 @@ Run the current test suite with:
 cargo test
 ```
 
-The single root-level crate uses `git2` for Git snapshots. Tree-sitter, `petgraph`, Ratatui, and Crossterm are declared for the planned parser, graph, and terminal stages.
+The single root-level crate uses `git2` for Git snapshots. Tree-sitter parses Python source. Module discovery supports regular packages at the repository root or under `src/`, including a static setuptools `package-dir` root of `.` or `src` in `pyproject.toml`. Unsupported package layouts receive a diagnostic. `petgraph`, Ratatui, and Crossterm are declared for the planned graph and terminal stages.
 
 ### Testing approach
 
-Small Python fixtures will define known before-and-after states. Integration tests can create temporary Git repositories, commit each state, run the analyzer, and compare its JSON report with the expected symbols and call edges. This will cover commits first, then staged and working-tree changes, renamed files, and unresolved calls.
+Current tests use small Python fixtures and temporary Git repositories to verify snapshot capture, symbol extraction, change classification, source locations, package discovery, and diagnostics. Later milestones will add call resolution and compare versioned JSON reports with independently known call edges.

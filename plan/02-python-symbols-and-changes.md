@@ -1,6 +1,6 @@
 # M2 — Python extraction and symbol changes
 
-Status: Planned. Prerequisite: [M1](01-project-and-git-snapshots.md).  
+Status: Implemented; Python symbol extraction and classification are ready for M3. Prerequisite: [M1](01-project-and-git-snapshots.md).  
 Coverage: FR02–FR05, extraction portion of FR07, parse diagnostics in FR11.
 
 ## Deliverable
@@ -36,14 +36,14 @@ Retain enough source bytes/ranges for later call evidence and TUI details. Do no
 
 ## Test and completion checklist
 
-- [ ] Functions, async functions, methods, decorators, nested functions/classes, qualified names, and module contexts are extracted correctly.
-- [ ] Calls in bodies, nested expressions, default arguments, and decorators receive the correct context; unsupported calls retain their expressions.
-- [ ] Explicit/relative imports, aliases, parameters, shadowing assignments, binding directives, and duplicate names are retained for M3.
-- [ ] Root packages and `src/` packages map consistently in both snapshots, including deleted package markers and ambiguous roots.
-- [ ] Comment/format-only changes leave definition classification unchanged; signature, literal, docstring, decorator, and nested-body changes do not.
-- [ ] Unicode identifiers, multiline expressions, BOM, exclusive ends, and unsupported encodings have verified locations and diagnostics.
-- [ ] Added/deleted files and functions, unchanged files, file-only changes, and unmatched moves are classified deterministically.
-- [ ] Broken syntax produces incomplete diagnostics without falsely treating every missing extracted symbol as deleted.
-- [ ] Tests use Python fixtures first and inherit the M1 integrity checks.
+- [x] Functions, async functions, methods, decorators, nested functions/classes, qualified names, and module contexts are extracted correctly.
+- [x] Calls in bodies, nested expressions, default arguments, and decorators receive the correct context; unsupported calls retain their expressions.
+- [x] Explicit/relative imports, aliases, parameters, shadowing assignments, binding directives, and duplicate names are retained for M3.
+- [x] Root packages and `src/` packages map consistently in both snapshots, including deleted package markers and ambiguous roots.
+- [x] Comment/format-only changes leave definition classification unchanged; signature, literal, docstring, decorator, and nested-body changes do not.
+- [x] Unicode identifiers, multiline expressions, BOM, exclusive ends, and unsupported encodings have verified locations and diagnostics.
+- [x] Added/deleted files and functions, unchanged files, file-only changes, and unmatched moves are classified deterministically.
+- [x] Broken syntax produces incomplete diagnostics without falsely treating every missing extracted symbol as deleted.
+- [x] Tests use Python fixtures first and inherit the M1 integrity checks.
 
 Handoff to M3: source-linked definitions and changes, full lexical extraction, canonical identities, and completeness diagnostics for both snapshots.

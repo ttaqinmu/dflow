@@ -94,8 +94,9 @@ fn input(e: impl fmt::Display) -> CaptureError {
     CaptureError::Input(e.to_string())
 }
 fn relevant(path: &[u8]) -> bool {
-    path.ends_with(b".py") || path == b"pyproject.toml" || path.ends_with(b"/pyproject.toml")
+    crate::languages::capture_path(path)
 }
+
 fn hash_files(files: &BTreeMap<Vec<u8>, CapturedFile>) -> String {
     let mut h = Sha256::new();
     for file in files.values() {

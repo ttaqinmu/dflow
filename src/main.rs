@@ -1,3 +1,4 @@
+#[allow(dead_code)] // Shared report fields are consumed in later milestones.
 mod analysis;
 mod cli;
 mod git;
@@ -32,14 +33,34 @@ fn main() {
     };
     match git::capture_comparison(&cli.mode, cwd) {
         Ok(capture) => {
-            // Later milestones consume this captured source; M1 does not emit an analysis report.
-            let _ = (
-                capture.pair.base.files.len(),
-                capture.pair.target.files.len(),
+            // M2 extracts symbols; M3 adds call resolution and a complete report.
+            let base = analysis::extract_snapshot(&capture.pair.base);
+            let target = analysis::extract_snapshot(&capture.pair.target);
+            let changes = analysis::classify_symbols(&base, &target);
+            for diagnostic in &capture.diagnostics {
+                eprintln!(
+                    "Git diagnostic at {:?}: {}",
+                    diagnostic.path, diagnostic.message
+                );
+            }
+            for diagnostic in &base.diagnostics {
+                eprintln!(
+                    "Python diagnostic at {:?}: {}",
+                    diagnostic.path, diagnostic.message
+                );
+            }
+            for diagnostic in &target.diagnostics {
+                eprintln!(
+                    "Python diagnostic at {:?}: {}",
+                    diagnostic.path, diagnostic.message
+                );
+            }
+            eprintln!(
+                "Captured {} file changes and classified {} Python symbol changes (complete: {}); call graph and report are not implemented yet",
                 capture.changes.len(),
-                capture.diagnostics.len(),
+                changes.changes.len(),
+                changes.complete
             );
-            eprintln!("Git snapshots captured; code analysis is not implemented yet");
             std::process::exit(1);
         }
         Err(error) => {
