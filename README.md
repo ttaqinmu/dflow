@@ -72,8 +72,11 @@ cargo run -- local --staged
 cargo run -- local --unstaged
 cargo run -- branch --base main --target feature
 cargo run -- local --format json --depth 2
+cargo run -- --dir ../other-repo local
+cargo run -- branch --base main --target feature --dir ../other-repo
 ```
 
+`--dir DIR` selects the starting directory for Git repository discovery in either mode. Relative paths resolve against the process current directory, not the repository root; paths inside a repository work because discovery ascends to its root. Without `--dir`, discovery starts at the process current directory. A missing or non-repository directory is invalid input (exit 2).
 If both stdin and stdout are terminals, the default output is an interactive graph. Otherwise the default is JSON. `--format json` always writes one JSON object to stdout; `--format tui` requires both terminals. Exit status is 0 for complete analysis, 1 for partial analysis or operational failure, and 2 for invalid input. A parse error produces a partial report, while an unresolved call by itself does not.
 
 ### Terminal controls

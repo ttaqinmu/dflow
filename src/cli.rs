@@ -3,6 +3,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[derive(Debug, Parser)]
 #[command(name = "dflow", about = "Analyze code changes in a Git repository")]
 pub struct Cli {
+    #[arg(long, global = true, value_name = "DIR")]
+    pub dir: Option<std::path::PathBuf>,
     #[command(subcommand)]
     pub mode: CompareMode,
 }
@@ -80,6 +82,52 @@ mod tests {
                 .mode,
             CompareMode::Branch(_)
         ));
+        for args in [
+            vec!["dflow", "--dir", "../other-repo", "local"],
+            vec!["dflow", "local", "--dir", "../other-repo"],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(matches!(cli.mode, CompareMode::Local(_)));
+            assert_eq!(
+                cli.dir.as_deref(),
+                Some(std::path::Path::new("../other-repo"))
+            );
+        }
+        for args in [
+            vec![
+                "dflow",
+                "--dir",
+                "../other-repo",
+                "branch",
+                "--base",
+                "main",
+                "--target",
+                "feature",
+            ],
+            vec![
+                "dflow",
+                "branch",
+                "--base",
+                "main",
+                "--target",
+                "feature",
+                "--dir",
+                "../other-repo",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(matches!(cli.mode, CompareMode::Branch(_)));
+            assert_eq!(
+                cli.dir.as_deref(),
+                Some(std::path::Path::new("../other-repo"))
+            );
+        }
+        assert_eq!(
+            Cli::try_parse_from(["dflow", "local", "--dir"])
+                .unwrap_err()
+                .exit_code(),
+            2
+        );
         assert!(Cli::try_parse_from(["dflow", "analyze", "local"]).is_err());
     }
     #[test]

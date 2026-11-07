@@ -15,15 +15,18 @@ fn commit(repo: &Repository, files: &[&str]) {
     repo.commit(Some("HEAD"), &sig, &sig, "fixture", &tree, &parents)
         .unwrap();
 }
-fn run(dir: &TempDir, args: &[&str]) -> (std::process::Output, Value) {
+fn run_from(dir: &Path, args: &[&str]) -> (std::process::Output, Value) {
     let output = Command::new(env!("CARGO_BIN_EXE_dflow"))
-        .current_dir(dir.path())
+        .current_dir(dir)
         .args(args)
         .output()
         .unwrap();
     let report = serde_json::from_slice(&output.stdout)
         .unwrap_or_else(|e| panic!("{e}; stderr={}", String::from_utf8_lossy(&output.stderr)));
     (output, report)
+}
+fn run(dir: &TempDir, args: &[&str]) -> (std::process::Output, Value) {
+    run_from(dir.path(), args)
 }
 #[test]
 fn all_local_selections_emit_json_without_mutating_index() {
@@ -110,4 +113,92 @@ fn partial_and_empty_reports_have_correct_status() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(!output.stderr.is_empty());
+}
+
+#[test]
+fn explicit_directory_selects_repository_for_local_and_branch() {
+    let parent = TempDir::new().unwrap();
+    let a = parent.path().join("a");
+    let b = parent.path().join("b");
+    fs::create_dir_all(&a).unwrap();
+    fs::create_dir_all(b.join("pkg")).unwrap();
+    let repo_a = Repository::init(&a).unwrap();
+    let repo_b = Repository::init(&b).unwrap();
+
+    fs::write(a.join("a.py"), "def a(): return 1\n").unwrap();
+    commit(&repo_a, &["a.py"]);
+    fs::write(a.join("a.py"), "def a(): return 2\n").unwrap();
+
+    fs::write(b.join("b.py"), "def b(): return 1\n").unwrap();
+    commit(&repo_b, &["b.py"]);
+    let base = repo_b.head().unwrap().peel_to_commit().unwrap();
+    repo_b.branch("base", &base, false).unwrap();
+    fs::write(b.join("b.py"), "def b(): return 2\n").unwrap();
+    commit(&repo_b, &["b.py"]);
+    let target = repo_b.head().unwrap().peel_to_commit().unwrap();
+    repo_b.branch("target", &target, false).unwrap();
+    fs::write(b.join("b.py"), "def b(): return 3\n").unwrap();
+
+    let (before_mode, local) = run_from(&a, &["--dir", "../b", "local", "--format", "json"]);
+    let (after_mode, same_local) = run_from(&a, &["local", "--dir", "../b", "--format", "json"]);
+    assert_eq!(before_mode.status.code(), Some(0));
+    assert_eq!(after_mode.status.code(), Some(0));
+    assert_eq!(before_mode.stdout, after_mode.stdout);
+    assert_eq!(local, same_local);
+    assert_eq!(local["comparison"]["mode"], "local");
+    assert_eq!(local["file_changes"][0]["path"]["text"], "b.py");
+    assert_eq!(local["file_changes"].as_array().unwrap().len(), 1);
+    assert!(
+        local["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "b")
+    );
+    assert!(
+        !local["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "a")
+    );
+
+    let (branch_output, branch) = run_from(
+        &a,
+        &[
+            "branch", "--base", "base", "--target", "target", "--dir", "../b/pkg", "--format",
+            "json",
+        ],
+    );
+    assert_eq!(branch_output.status.code(), Some(0));
+    assert_eq!(branch["comparison"]["mode"], "branch");
+    assert_eq!(branch["comparison"]["base"], "base");
+    assert_eq!(branch["comparison"]["target"], "target");
+    assert_eq!(branch["snapshots"]["base"]["branch"], "refs/heads/base");
+    assert_eq!(branch["snapshots"]["target"]["branch"], "refs/heads/target");
+    assert_eq!(branch["file_changes"][0]["path"]["text"], "b.py");
+    assert_eq!(branch["symbol_changes"][0]["kind"], "modified");
+    assert!(
+        branch["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "b")
+    );
+    assert!(
+        !branch["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"] == "a")
+    );
+
+    let invalid = Command::new(env!("CARGO_BIN_EXE_dflow"))
+        .current_dir(&a)
+        .args(["--dir", "../missing", "local", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(invalid.stdout.is_empty());
+    assert!(!invalid.stderr.is_empty());
 }

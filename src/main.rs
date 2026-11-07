@@ -34,7 +34,12 @@ fn main() {
             std::process::exit(2);
         }
     };
-    match git::capture_comparison(&cli.mode, cwd) {
+    let discovery_dir = match cli.dir.as_ref() {
+        Some(dir) if dir.is_absolute() => dir.clone(),
+        Some(dir) => cwd.join(dir),
+        None => cwd,
+    };
+    match git::capture_comparison(&cli.mode, discovery_dir) {
         Ok(capture) => {
             let session = report::AnalysisSession::new(capture);
             if matches!(format, OutputFormat::Tui) {
