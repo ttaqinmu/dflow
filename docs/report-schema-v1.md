@@ -1,6 +1,6 @@
 # DFlow JSON report schema v1
 
-`dflow local` and `dflow branch` print exactly one JSON object and a newline to stdout. M3 defaults to JSON in every environment. `--format tui` becomes available in M4. Exit status is 0 for complete analysis, 1 for partial analysis or output failure, and 2 for invalid input. Operational errors go to stderr. An unresolved call does not make a report partial.
+`dflow local` and `dflow branch` print exactly one JSON object and a newline to stdout when output is JSON. JSON is the default when either stdin or stdout is not a terminal; both terminals default to the interactive graph. `--format json` always selects JSON. Exit status is 0 for complete analysis, 1 for partial analysis or output failure, and 2 for invalid input. Operational errors go to stderr. An unresolved call does not make a report partial.
 
 ## Top-level fields
 

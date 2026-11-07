@@ -8,7 +8,8 @@ mod report;
 mod tui;
 
 use clap::Parser;
-use cli::{Cli, CompareMode};
+use cli::{Cli, CompareMode, OutputFormat};
+use std::io::IsTerminal;
 
 fn main() {
     let cli = Cli::parse();
@@ -16,10 +17,16 @@ fn main() {
         CompareMode::Local(local) => &local.options,
         CompareMode::Branch(branch) => &branch.options,
     };
-    if let Err(message) = options.selected_format(false, false) {
-        eprintln!("{message}");
-        std::process::exit(2);
-    }
+    let format = match options.selected_format(
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    ) {
+        Ok(format) => format,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
     let cwd = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(error) => {
@@ -30,6 +37,13 @@ fn main() {
     match git::capture_comparison(&cli.mode, cwd) {
         Ok(capture) => {
             let session = report::AnalysisSession::new(capture);
+            if matches!(format, OutputFormat::Tui) {
+                if let Err(error) = tui::run(&session, &cli.mode, options.depth as usize) {
+                    eprintln!("terminal UI error: {error}");
+                    std::process::exit(1);
+                }
+                std::process::exit(if session.complete() { 0 } else { 1 });
+            }
             let value = session.report(&cli.mode, options.depth as usize);
             let mut encoded = match serde_json::to_vec(&value) {
                 Ok(encoded) => encoded,

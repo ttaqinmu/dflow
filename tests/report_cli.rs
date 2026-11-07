@@ -63,7 +63,7 @@ fn all_local_selections_emit_json_without_mutating_index() {
     );
 }
 #[test]
-fn branch_tips_ignore_dirty_worktree_and_tui_is_unavailable() {
+fn branch_tips_ignore_dirty_worktree_and_tui_requires_terminals() {
     let dir = TempDir::new().unwrap();
     let repo = Repository::init(dir.path()).unwrap();
     fs::write(dir.path().join("a.py"), "def f(): return 1\n").unwrap();

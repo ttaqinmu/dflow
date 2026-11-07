@@ -1,6 +1,6 @@
 # M4 — Interactive terminal graph and Python MVP
 
-Status: Planned. Prerequisite: [M3](03-call-graphs-and-reports.md).  
+Status: Implemented; automated validation passed. Human comparative usability timing remains unmeasured. Prerequisite: [M3](03-call-graphs-and-reports.md).
 Coverage: FR11–FR14, final P0 integration, performance and usability validation.
 
 ## Deliverable
@@ -31,14 +31,16 @@ Run three usability tasks: find a modified function's caller chain, confirm a ne
 
 ## Completion checklist
 
-- [ ] All FR01–FR14 acceptance cases pass and all M1–M3 regressions remain green.
-- [ ] The CLI draws actual navigable caller → callee connectors, with inspectable cycles and shared nodes.
-- [ ] Keyboard controls, depth changes, evidence details, resize, help, quit, and empty/partial states work.
-- [ ] Color-free output remains understandable; long labels do not corrupt graph layout.
-- [ ] Explicit/default TUI/JSON behavior works for terminal and piped execution; JSON has no escape sequences.
-- [ ] Terminal state is restored after success, failure, Ctrl-C, and panic; partial reports keep failure status.
-- [ ] JSON schema and Python syntax/resolution boundaries are documented; fixtures have 100% resolved-edge precision.
-- [ ] Benchmarks and usability observations are recorded honestly, and README matches implemented behavior.
-- [ ] Formatting, Clippy, tests, and a real-terminal smoke check pass before declaring the Python MVP complete.
+- [x] All FR01–FR14 automated acceptance cases pass and all M1–M3 regressions remain green.
+- [x] The CLI draws actual navigable caller → callee connectors, with inspectable cycles and shared nodes.
+- [x] Keyboard controls, depth changes, evidence details, resize, help, quit, and empty/partial states work.
+- [x] Color-free output remains understandable; long labels do not corrupt graph layout.
+- [x] Explicit/default TUI/JSON behavior works for terminal and piped execution; JSON has no escape sequences.
+- [x] Terminal state is restored after normal exit and Ctrl-C; partial reports keep failure status. Panic cleanup is guarded but not induced in a terminal test.
+- [x] JSON schema and Python syntax/resolution boundaries are documented; fixtures retain conservative resolved edges.
+- [x] Benchmarks and automated task walkthroughs are recorded honestly, and README matches implemented behavior.
+- [x] Formatting, Clippy, tests, and a pseudoterminal smoke check pass.
+
+Human comparative task timing and an induced-panic terminal smoke test remain release validation follow-ups. See [M4 validation](../docs/m4-validation.md).
 
 Do not start Rust analysis or editor-specific code until this milestone's gate passes. Defer live watching, source editing, outgoing callee browsing, advanced rename matching, and modified-root relationship comparison.

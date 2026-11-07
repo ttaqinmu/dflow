@@ -1,6 +1,6 @@
 # DFlow implementation plans
 
-Status: Planned; no implementation is claimed.  
+Status: M1–M4 implemented; M4 human comparative usability timing remains unmeasured.
 Source of truth: [PRD](PRD.md). All plans are in English.
 
 ## Execution order

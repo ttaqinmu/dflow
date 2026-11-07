@@ -50,12 +50,16 @@ pub enum OutputFormat {
 impl AnalyzeOptions {
     pub fn selected_format(
         &self,
-        _stdin_tty: bool,
-        _stdout_tty: bool,
+        stdin_tty: bool,
+        stdout_tty: bool,
     ) -> Result<OutputFormat, &'static str> {
         match self.format {
-            Some(OutputFormat::Tui) => Err("TUI output is available in M4"),
-            _ => Ok(OutputFormat::Json),
+            Some(OutputFormat::Tui) if !(stdin_tty && stdout_tty) => {
+                Err("TUI requires terminal stdin and stdout")
+            }
+            Some(format) => Ok(format),
+            None if stdin_tty && stdout_tty => Ok(OutputFormat::Tui),
+            None => Ok(OutputFormat::Json),
         }
     }
 }
@@ -77,5 +81,37 @@ mod tests {
             CompareMode::Branch(_)
         ));
         assert!(Cli::try_parse_from(["dflow", "analyze", "local"]).is_err());
+    }
+    #[test]
+    fn format_defaults_follow_terminal_pair() {
+        let options = AnalyzeOptions {
+            format: None,
+            depth: 1,
+        };
+        assert!(matches!(
+            options.selected_format(true, true),
+            Ok(OutputFormat::Tui)
+        ));
+        assert!(matches!(
+            options.selected_format(true, false),
+            Ok(OutputFormat::Json)
+        ));
+        assert!(matches!(
+            options.selected_format(false, true),
+            Ok(OutputFormat::Json)
+        ));
+        let explicit_tui = AnalyzeOptions {
+            format: Some(OutputFormat::Tui),
+            depth: 1,
+        };
+        assert!(explicit_tui.selected_format(false, false).is_err());
+        let explicit_json = AnalyzeOptions {
+            format: Some(OutputFormat::Json),
+            depth: 1,
+        };
+        assert!(matches!(
+            explicit_json.selected_format(true, true),
+            Ok(OutputFormat::Json)
+        ));
     }
 }
