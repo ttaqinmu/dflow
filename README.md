@@ -4,7 +4,7 @@ DFlow is an experimental Rust tool for exploring how changes in a Git repository
 
 The goal is to answer questions such as: *Which functions call the function I changed? What calls a newly added function? Who called a function before it was deleted?* DFlow will turn those relationships into a diagram that can be used from a standalone CLI and, eventually, from Zed.
 
-> **Status:** M2 Python extraction foundation. The root-level Rust CLI captures local and branch-tip snapshots through `git2`, parses captured Python files with Tree-sitter, and classifies added, modified, and deleted functions. Call resolution, JSON reports, and terminal diagrams are planned. `dflow local` and `dflow branch` currently exit with code 1 after extraction because a complete impact report is not implemented. See [PRD and implementation plans](plan/README.md).
+> **Status:** M3 JSON CLI. DFlow captures local or branch-tip Git snapshots, extracts Python symbols, resolves conservative static calls, traces callers, and emits a [versioned JSON report](docs/report-schema-v1.md). Interactive terminal graphs are planned for M4. Unresolved calls remain explicit; the tool does not run repository code.
 
 ## Intended workflow
 
@@ -12,7 +12,7 @@ The goal is to answer questions such as: *Which functions call the function I ch
 2. Parse Python files in both snapshots and identify functions, methods, imports, and call sites.
 3. Match symbols across snapshots and classify them as added, modified, or deleted.
 4. Resolve calls where possible and build a call graph for each snapshot.
-5. Trace callers and callees around changed symbols. Deleted symbols use the graph from the earlier snapshot.
+5. Trace callers around changed symbols. Deleted symbols use the graph from the earlier snapshot.
 6. Produce a structured report that presentation layers can render as JSON, Mermaid, or an editor view.
 
 An intended diagram might look like this:
@@ -51,9 +51,9 @@ This is a conceptual boundary, not the current crate layout. The first implement
 - [x] Compare two Git snapshots and list changed Python files.
 - [x] Extract Python functions and their source ranges.
 - [x] Identify added, modified, and deleted symbols across snapshots.
-- [ ] Build a call graph for direct, statically resolvable calls.
-- [ ] Trace callers of changed symbols, including deleted symbols in the earlier snapshot.
-- [ ] Expose a stable JSON report through the CLI.
+- [x] Build a call graph for direct, statically resolvable calls.
+- [x] Trace callers of changed symbols, including deleted symbols in the earlier snapshot.
+- [x] Expose a stable JSON report through the CLI.
 - [ ] Render focused Mermaid diagrams from the report.
 - [ ] Prototype a Zed workflow using the same core analysis.
 
@@ -68,6 +68,7 @@ cargo run -- local
 cargo run -- local --staged
 cargo run -- local --unstaged
 cargo run -- branch --base main --target feature
+cargo run -- local --format json --depth 2
 ```
 
 Run the current test suite with:
@@ -76,8 +77,8 @@ Run the current test suite with:
 cargo test
 ```
 
-The single root-level crate uses `git2` for Git snapshots. Tree-sitter parses Python source. Module discovery supports regular packages at the repository root or under `src/`, including a static setuptools `package-dir` root of `.` or `src` in `pyproject.toml`. Unsupported package layouts receive a diagnostic. `petgraph`, Ratatui, and Crossterm are declared for the planned graph and terminal stages.
+The single root-level crate uses `git2` for Git snapshots. Tree-sitter parses Python source. Module discovery supports regular packages at the repository root or under `src/`, including a static setuptools `package-dir` root of `.` or `src` in `pyproject.toml`. Unsupported package layouts receive a diagnostic. `petgraph` stores the call graphs; Ratatui and Crossterm are declared for the planned terminal stage.
 
 ### Testing approach
 
-Current tests use small Python fixtures and temporary Git repositories to verify snapshot capture, symbol extraction, change classification, source locations, package discovery, and diagnostics. Later milestones will add call resolution and compare versioned JSON reports with independently known call edges.
+Current tests use small Python fixtures and temporary Git repositories to verify snapshot capture, symbol extraction, conservative call resolution, caller traversal, JSON references, source locations, package discovery, and diagnostics. The terminal graph is the next milestone.

@@ -58,6 +58,7 @@ pub struct Symbol {
     pub qualified_name: String,
     pub kind: SymbolKind,
     pub fingerprint: String,
+    pub decorated: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindingKind {
@@ -90,7 +91,14 @@ pub struct ImportBinding {
 pub struct ExtractedCallSite {
     pub scope_id: usize,
     pub expression: String,
+    pub target: CallTarget,
     pub source: SourceRef,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallTarget {
+    Name(String),
+    Qualified(Vec<String>),
+    Dynamic,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticKind {

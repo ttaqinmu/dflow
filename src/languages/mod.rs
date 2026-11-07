@@ -29,3 +29,42 @@ pub fn capture_path(path: &[u8]) -> bool {
         .iter()
         .any(|adapter| adapter.accepts_source(path) || adapter.accepts_metadata(path))
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnresolvedReason {
+    DynamicTarget,
+    Shadowed,
+    AmbiguousBinding,
+    AmbiguousTarget,
+    MissingTarget,
+    ExternalTarget,
+    WildcardImport,
+    UnknownModule,
+    UnsupportedDispatch,
+    DecoratedTarget,
+    ParseError,
+}
+#[derive(Debug, Clone)]
+pub enum Resolution<'a> {
+    Resolved(&'a crate::analysis::Symbol),
+    Unresolved(UnresolvedReason),
+}
+pub struct ResolverRegistry<'a> {
+    python: python::resolve::PythonIndex<'a>,
+}
+impl<'a> ResolverRegistry<'a> {
+    pub fn new(snapshot: &'a crate::analysis::ExtractedSnapshot) -> Self {
+        Self {
+            python: python::resolve::PythonIndex::new(snapshot),
+        }
+    }
+    pub fn resolve(
+        &self,
+        file: &'a crate::analysis::ParsedFile,
+        call: &crate::analysis::ExtractedCallSite,
+    ) -> Resolution<'a> {
+        match file.language {
+            crate::analysis::LanguageId::Python => self.python.resolve(file, call),
+        }
+    }
+}

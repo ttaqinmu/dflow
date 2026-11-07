@@ -1,6 +1,7 @@
+pub mod resolve;
 use crate::analysis::{
-    Binding, BindingKind, Diagnostic, DiagnosticKind, ExtractedCallSite, ImportBinding, LanguageId,
-    ParsedFile, Position, Scope, ScopeKind, SourceRange, SourceRef, Symbol, SymbolKind,
+    Binding, BindingKind, CallTarget, Diagnostic, DiagnosticKind, ExtractedCallSite, ImportBinding,
+    LanguageId, ParsedFile, Position, Scope, ScopeKind, SourceRange, SourceRef, Symbol, SymbolKind,
     fingerprint,
 };
 use crate::git::{CapturedFile, CapturedSnapshot, SnapshotRole};
@@ -286,14 +287,42 @@ impl Walker<'_> {
             }
         }
     }
+    fn call_target(&self, node: Node<'_>) -> CallTarget {
+        match node.kind() {
+            "identifier" => CallTarget::Name(self.text(node)),
+            "attribute" => {
+                let Some(object) = node.child_by_field_name("object") else {
+                    return CallTarget::Dynamic;
+                };
+                let Some(attribute) = node.child_by_field_name("attribute") else {
+                    return CallTarget::Dynamic;
+                };
+                match self.call_target(object) {
+                    CallTarget::Name(root) => {
+                        CallTarget::Qualified(vec![root, self.text(attribute)])
+                    }
+                    CallTarget::Qualified(mut parts) => {
+                        parts.push(self.text(attribute));
+                        CallTarget::Qualified(parts)
+                    }
+                    CallTarget::Dynamic => CallTarget::Dynamic,
+                }
+            }
+            _ => CallTarget::Dynamic,
+        }
+    }
     fn add_call(&mut self, node: Node<'_>, scope_id: usize) {
-        let expression = node
-            .child_by_field_name("function")
+        let function = node.child_by_field_name("function");
+        let expression = function
             .map(|n| self.text(n))
             .unwrap_or_else(|| self.text(node));
+        let target = function
+            .map(|n| self.call_target(n))
+            .unwrap_or(CallTarget::Dynamic);
         self.parsed.calls.push(ExtractedCallSite {
             scope_id,
             expression,
+            target,
             source: self.source(node),
         });
     }
@@ -343,6 +372,7 @@ impl Walker<'_> {
                 qualified_name: qualified,
                 kind: symbol_kind,
                 fingerprint: fingerprint(parts),
+                decorated: outer.id() != inner.id(),
             });
         }
         // Decorators, class superclasses, and parameter defaults execute in the enclosing scope.

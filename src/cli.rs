@@ -50,16 +50,12 @@ pub enum OutputFormat {
 impl AnalyzeOptions {
     pub fn selected_format(
         &self,
-        stdin_tty: bool,
-        stdout_tty: bool,
+        _stdin_tty: bool,
+        _stdout_tty: bool,
     ) -> Result<OutputFormat, &'static str> {
         match self.format {
-            Some(OutputFormat::Tui) if !(stdin_tty && stdout_tty) => {
-                Err("TUI requires terminal stdin and stdout")
-            }
-            Some(format) => Ok(format),
-            None if stdin_tty && stdout_tty => Ok(OutputFormat::Tui),
-            None => Ok(OutputFormat::Json),
+            Some(OutputFormat::Tui) => Err("TUI output is available in M4"),
+            _ => Ok(OutputFormat::Json),
         }
     }
 }

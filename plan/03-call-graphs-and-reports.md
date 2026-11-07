@@ -1,6 +1,6 @@
 # M3 — Call resolution, impact graphs, and JSON
 
-Status: Planned. Prerequisite: [M2](02-python-symbols-and-changes.md).  
+Status: Implemented; JSON and caller graphs are ready for M4. Prerequisite: [M2](02-python-symbols-and-changes.md).
 Coverage: FR03, FR06–FR12, and repository integrity inherited from M1.
 
 ## Deliverable
@@ -30,14 +30,14 @@ A complete report means supported files were analyzed without operational/parse 
 
 ## Test and completion checklist
 
-- [ ] Resolve lexical/module calls, explicit aliases, known relative imports, recursion, and cross-file callers in unchanged files against independently specified targets.
-- [ ] Never invent edges for parameters/assignments shadowing names, dynamic calls, wildcard imports, duplicate candidates, external symbols, or unsupported methods/decorators.
-- [ ] Added roots with no callers remain valid; deleted roots and historical callers use only base evidence.
-- [ ] Depth 0/1/larger values, diamonds, self recursion, mutual recursion, shared callers, and multiple call sites preserve distance and terminate.
-- [ ] Each resolved edge references correct caller/callee/call-site entities in the same snapshot; unresolved sites have no certain edge.
-- [ ] JSON schema examples cover all snapshot kinds, non-UTF-8 paths, partial reports, and empty results.
-- [ ] Repeated runs over identical captures and different hash-map insertion order produce byte-identical JSON.
-- [ ] CLI integration tests verify invalid input exit 2, analysis failure exit 1, complete/empty/unresolved-only exit 0, clean stdout, and stderr diagnostics.
-- [ ] All four snapshot comparisons exercise the complete JSON pipeline, preserving M1 repository integrity.
+- [x] Resolve lexical/module calls, explicit aliases, known relative imports, recursion, and cross-file callers in unchanged files against independently specified targets.
+- [x] Never invent edges for parameters/assignments shadowing names, dynamic calls, wildcard imports, duplicate candidates, external symbols, or unsupported methods/decorators.
+- [x] Added roots with no callers remain valid; deleted roots and historical callers use only base evidence.
+- [x] Depth 0/1/larger values, diamonds, self recursion, mutual recursion, shared callers, and multiple call sites preserve distance and terminate.
+- [x] Each resolved edge references correct caller/callee/call-site entities in the same snapshot; unresolved sites have no certain edge.
+- [x] JSON schema examples cover all snapshot kinds, non-UTF-8 paths, partial reports, and empty results.
+- [x] Repeated runs over identical captures and different hash-map insertion order produce byte-identical JSON.
+- [x] CLI integration tests verify invalid input exit 2, analysis failure exit 1, complete/empty/unresolved-only exit 0, clean stdout, and stderr diagnostics.
+- [x] All four snapshot comparisons exercise the complete JSON pipeline, preserving M1 repository integrity.
 
 Measure resolved-edge precision and resolution coverage separately; fixture precision must be 100%. A test must verify target identity and call location rather than merely counting edges. Handoff to M4: accepted JSON/report model and a reusable captured analysis session.

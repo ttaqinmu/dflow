@@ -1,4 +1,4 @@
-#[allow(dead_code)] // Shared report fields are consumed in later milestones.
+#[allow(dead_code)] // Some analysis fields are consumed by later milestones.
 mod analysis;
 mod cli;
 mod git;
@@ -9,7 +9,6 @@ mod tui;
 
 use clap::Parser;
 use cli::{Cli, CompareMode};
-use std::io::IsTerminal;
 
 fn main() {
     let cli = Cli::parse();
@@ -17,10 +16,7 @@ fn main() {
         CompareMode::Local(local) => &local.options,
         CompareMode::Branch(branch) => &branch.options,
     };
-    if let Err(message) = options.selected_format(
-        std::io::stdin().is_terminal(),
-        std::io::stdout().is_terminal(),
-    ) {
+    if let Err(message) = options.selected_format(false, false) {
         eprintln!("{message}");
         std::process::exit(2);
     }
@@ -33,35 +29,24 @@ fn main() {
     };
     match git::capture_comparison(&cli.mode, cwd) {
         Ok(capture) => {
-            // M2 extracts symbols; M3 adds call resolution and a complete report.
-            let base = analysis::extract_snapshot(&capture.pair.base);
-            let target = analysis::extract_snapshot(&capture.pair.target);
-            let changes = analysis::classify_symbols(&base, &target);
-            for diagnostic in &capture.diagnostics {
-                eprintln!(
-                    "Git diagnostic at {:?}: {}",
-                    diagnostic.path, diagnostic.message
-                );
+            let session = report::AnalysisSession::new(capture);
+            let value = session.report(&cli.mode, options.depth as usize);
+            let mut encoded = match serde_json::to_vec(&value) {
+                Ok(encoded) => encoded,
+                Err(error) => {
+                    eprintln!("cannot encode JSON report: {error}");
+                    std::process::exit(1);
+                }
+            };
+            encoded.push(b'\n');
+            let stdout = std::io::stdout();
+            let mut output = stdout.lock();
+            use std::io::Write;
+            if let Err(error) = output.write_all(&encoded) {
+                eprintln!("cannot write JSON report: {error}");
+                std::process::exit(1);
             }
-            for diagnostic in &base.diagnostics {
-                eprintln!(
-                    "Python diagnostic at {:?}: {}",
-                    diagnostic.path, diagnostic.message
-                );
-            }
-            for diagnostic in &target.diagnostics {
-                eprintln!(
-                    "Python diagnostic at {:?}: {}",
-                    diagnostic.path, diagnostic.message
-                );
-            }
-            eprintln!(
-                "Captured {} file changes and classified {} Python symbol changes (complete: {}); call graph and report are not implemented yet",
-                capture.changes.len(),
-                changes.changes.len(),
-                changes.complete
-            );
-            std::process::exit(1);
+            std::process::exit(if session.complete() { 0 } else { 1 });
         }
         Err(error) => {
             eprintln!("{error}");
