@@ -67,6 +67,13 @@ pub fn run(session: &AnalysisSession, mode: &CompareMode, depth: usize) -> io::R
         panic_previous(info);
     }));
     let result = (|| {
+        // Debug-only terminal lifecycle probes for the pseudoterminal validation harness.
+        #[cfg(debug_assertions)]
+        match std::env::var("DFLOW_INTERNAL_TUI_FAULT").as_deref() {
+            Ok("panic") => panic!("injected terminal panic"),
+            Ok("error") => return Err(io::Error::other("injected terminal error")),
+            _ => {}
+        }
         let mut terminal = Terminal::new(CrosstermBackend::<Stdout>::new(io::stdout()))?;
         loop {
             let size = terminal.size()?;

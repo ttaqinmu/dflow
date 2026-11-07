@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Exercise the debug DFlow binary in a real Linux pseudoterminal."""
+
+import fcntl
+import os
+from pathlib import Path
+import pty
+import select
+import signal
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import time
+
+
+def git(root: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args], cwd=root, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+
+def collect(master: int, process: subprocess.Popen[bytes], marker: bytes | None, seconds: float = 5) -> bytes:
+    output = bytearray()
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([master], [], [], 0.05)
+        if ready:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            output.extend(chunk)
+            if marker is not None and marker in output:
+                break
+        elif process.poll() is not None:
+            break
+    return bytes(output)
+
+
+def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"", fault: str | None = None, resize: bool = False, help_key: bool = False) -> tuple[int, bytes]:
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
+    before = termios.tcgetattr(slave)
+    env = os.environ.copy()
+    if fault:
+        env["DFLOW_INTERNAL_TUI_FAULT"] = fault
+    process = subprocess.Popen(
+        [str(binary), "local", "--format", "tui"],
+        cwd=root,
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        env=env,
+    )
+    try:
+        output = collect(master, process, marker)
+        if marker is not None and marker not in output:
+            raise AssertionError(f"TUI marker {marker!r} did not appear")
+        if resize:
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 100, 0, 0))
+            os.kill(process.pid, signal.SIGWINCH)
+            output += collect(master, process, None, 0.2)
+        if help_key:
+            os.write(master, b"?")
+            help_output = collect(master, process, b"Help")
+            assert b"Help" in help_output, "help key did not open help"
+            output += help_output
+        if keys:
+            os.write(master, keys)
+        process.wait(timeout=5)
+        output += collect(master, process, None, 0.2)
+        after = termios.tcgetattr(slave)
+        assert before == after, "terminal mode was not fully restored"
+        assert b"\x1b[?1049h" in output, "alternate screen was not entered"
+        assert b"\x1b[?1049l" in output, "alternate screen was not left"
+        return process.returncode, output
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        os.close(master)
+        os.close(slave)
+
+
+def main() -> None:
+    binary = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/dflow").resolve()
+    if not binary.is_file():
+        raise SystemExit(f"binary not found: {binary}; run cargo build first")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "a.py"
+        source.write_text("def f(): return 1\n")
+        git(root, "init")
+        git(root, "config", "user.name", "Fixture")
+        git(root, "config", "user.email", "fixture@example.com")
+        git(root, "add", ".")
+        git(root, "commit", "-m", "base")
+        source.write_text("def f(): return 2\n")
+
+        code, output = run_case(binary, root, marker=b"Graph", keys=b"q", resize=True, help_key=True)
+        assert code == 0 and b"complete" in output
+
+        source.write_text("def f(:\n")
+        code, output = run_case(binary, root, marker=b"PARTIAL", keys=b"\x03")
+        assert code == 1 and b"PARTIAL" in output
+        source.write_text("def f(): return 2\n")
+
+        code, output = run_case(binary, root, marker=None, fault="panic")
+        assert code != 0 and b"injected terminal panic" in output
+        assert output.index(b"\x1b[?1049l") < output.index(b"injected terminal panic")
+
+        code, output = run_case(binary, root, marker=None, fault="error")
+        assert code == 1 and b"injected terminal error" in output
+        assert output.index(b"\x1b[?1049l") < output.index(b"terminal UI error")
+
+        print("PTY: normal, help, resize, partial Ctrl-C, panic, error, and terminal restoration passed")
+
+
+if __name__ == "__main__":
+    main()

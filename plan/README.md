@@ -1,6 +1,6 @@
 # DFlow implementation plans
 
-Status: M1–M4 implemented; M4 human comparative usability timing remains unmeasured.
+Status: M1–M4 engineering work implemented; M4 technical validation passed, with its human usability gate deferred.
 Source of truth: [PRD](PRD.md). All plans are in English.
 
 ## Execution order
