@@ -4,7 +4,7 @@ DFlow is an experimental Rust tool for exploring how changes in a Git repository
 
 The goal is to answer questions such as: *Which functions call the function I changed? What calls a newly added function? Who called a function before it was deleted?* DFlow will turn those relationships into a diagram that can be used from a standalone CLI and, eventually, from Zed.
 
-> **Status:** Early prototype. The current executable only opens the Git repository in the current directory and prints its repository state. Diff analysis, Python parsing, call graphs, and diagram output are planned; they are not implemented yet.
+> **Status:** M1 Git snapshot foundation. The root-level Rust binary crate can capture local (combined, staged, or unstaged) and branch-tip snapshots through `git2`. Python extraction, call graphs, JSON reports, and terminal diagrams are not implemented yet. The `analyze` command currently exits with code 1 after capture to avoid presenting a placeholder analysis as success. See [PRD and implementation plans](plan/README.md).
 
 ## Intended workflow
 
@@ -64,7 +64,10 @@ Initial Python support will focus on local calls and explicit imports. Method di
 Install a Rust toolchain that supports the 2024 edition, then run:
 
 ```sh
-cargo run
+cargo run -- local
+cargo run -- local --staged
+cargo run -- local --unstaged
+cargo run -- branch --base main --target feature
 ```
 
 Run the current test suite with:
@@ -73,7 +76,7 @@ Run the current test suite with:
 cargo test
 ```
 
-The repository currently depends on `git2` for Git access. No parser or graph library has been selected yet.
+The single root-level crate uses `git2` for Git snapshots. Tree-sitter, `petgraph`, Ratatui, and Crossterm are declared for the planned parser, graph, and terminal stages.
 
 ### Testing approach
 

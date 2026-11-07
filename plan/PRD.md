@@ -178,13 +178,13 @@ Method extraction does not imply complete method dispatch resolution. Instance d
 The following commands describe the required interface; they are not yet implemented:
 
 ```sh
-dflow analyze local
-dflow analyze local --staged
-dflow analyze local --unstaged
-dflow analyze branch --base main --target feature
+dflow local
+dflow local --staged
+dflow local --unstaged
+dflow branch --base main --target feature
 
-dflow analyze local --format json
-dflow analyze branch --base main --target feature --format tui --depth 3
+dflow local --format json
+dflow branch --base main --target feature --format tui --depth 3
 ```
 
 - Require an explicit `local` or `branch` mode. Reject branch arguments in local mode and local comparison flags in branch mode.
