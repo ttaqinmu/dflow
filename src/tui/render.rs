@@ -1,5 +1,6 @@
 use super::layout::BOX_WIDTH;
 use super::state::{App, Focus, display_path, kind, role, safe_text};
+use crate::analysis::SymbolChangeKind;
 use crate::cli::CompareMode;
 use crate::git::{CapturedSnapshot, SnapshotRole};
 use ratatui::buffer::Buffer;
@@ -7,6 +8,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use std::collections::BTreeMap;
 
 fn truncate(value: &str, width: usize) -> String {
     value
@@ -62,6 +64,14 @@ fn panel<'a>(title: &'a str, focused: bool) -> Block<'a> {
             Style::default()
         })
 }
+fn change_style(change: SymbolChangeKind) -> Style {
+    Style::default().fg(match change {
+        SymbolChangeKind::Added => Color::Green,
+        SymbolChangeKind::Deleted => Color::Red,
+        SymbolChangeKind::Modified => Color::Yellow,
+    })
+}
+
 fn put(buf: &mut Buffer, area: Rect, x: i32, y: i32, pan: (i32, i32), symbol: &str, style: Style) {
     let sx = x - pan.0;
     let sy = y - pan.1;
@@ -71,8 +81,58 @@ fn put(buf: &mut Buffer, area: Rect, x: i32, y: i32, pan: (i32, i32), symbol: &s
             .set_style(style);
     }
 }
+const NORTH: u8 = 1;
+const EAST: u8 = 2;
+const SOUTH: u8 = 4;
+const WEST: u8 = 8;
+
+fn connect(lines: &mut BTreeMap<(i32, i32), u8>, from: (i32, i32), to: (i32, i32)) {
+    let (mut x, mut y) = from;
+    while (x, y) != to {
+        let (nx, ny, direction, opposite) = if x != to.0 {
+            let step = (to.0 - x).signum();
+            (
+                x + step,
+                y,
+                if step > 0 { EAST } else { WEST },
+                if step > 0 { WEST } else { EAST },
+            )
+        } else {
+            let step = (to.1 - y).signum();
+            (
+                x,
+                y + step,
+                if step > 0 { SOUTH } else { NORTH },
+                if step > 0 { NORTH } else { SOUTH },
+            )
+        };
+        *lines.entry((x, y)).or_default() |= direction;
+        *lines.entry((nx, ny)).or_default() |= opposite;
+        (x, y) = (nx, ny);
+    }
+}
+
+fn line_glyph(directions: u8) -> &'static str {
+    match directions {
+        1 | 4 | 5 => "│",
+        2 | 8 | 10 => "─",
+        3 => "└",  // north + east
+        6 => "┌",  // east + south
+        12 => "┐", // south + west
+        9 => "┘",  // west + north
+        7 => "├",  // north + east + south
+        13 => "┤", // north + south + west
+        14 => "┬", // east + south + west
+        11 => "┴", // north + east + west
+        15 => "┼",
+        _ => unreachable!("connector direction bits must describe a line"),
+    }
+}
+
 fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
     let normal = Style::default();
+    let mut lines = BTreeMap::new();
+    let mut arrows = Vec::with_capacity(app.layout.edges.len());
     for (from, to) in &app.layout.edges {
         let caller = &app.layout.components[*from];
         let callee = &app.layout.components[*to];
@@ -81,34 +141,47 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
         let tx = callee.x - 1;
         let ty = callee.y + 1;
         let lane = sx + 3;
-        for x in sx..=lane {
-            put(buf, area, x, sy, (app.pan_x, app.pan_y), "-", normal);
-        }
-        for y in sy.min(ty)..=sy.max(ty) {
-            put(buf, area, lane, y, (app.pan_x, app.pan_y), "|", normal);
-        }
-        for x in lane..=tx {
-            put(buf, area, x, ty, (app.pan_x, app.pan_y), "-", normal);
-        }
-        put(buf, area, lane, sy, (app.pan_x, app.pan_y), "+", normal);
-        put(buf, area, lane, ty, (app.pan_x, app.pan_y), "+", normal);
-        put(buf, area, tx, ty, (app.pan_x, app.pan_y), ">", normal);
+        connect(&mut lines, (sx, sy), (lane, sy));
+        connect(&mut lines, (lane, sy), (lane, ty));
+        connect(&mut lines, (lane, ty), (tx - 1, ty));
+        arrows.push((tx, ty));
+    }
+    for ((x, y), directions) in lines {
+        put(
+            buf,
+            area,
+            x,
+            y,
+            (app.pan_x, app.pan_y),
+            line_glyph(directions),
+            normal,
+        );
+    }
+    for (x, y) in arrows {
+        put(buf, area, x, y, (app.pan_x, app.pan_y), "→", normal);
     }
     for component in &app.layout.components {
         let selected = app
             .selected_node
             .as_ref()
             .is_some_and(|id| component.members.contains(id));
+        let base_style = app
+            .root()
+            .filter(|root| component.members.contains(&root.id))
+            .map(|root| change_style(root.kind))
+            .unwrap_or(normal);
         let style = if selected {
-            Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            base_style.add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
-            normal
+            base_style
         };
         for x in component.x..component.x + BOX_WIDTH {
-            let edge = if x == component.x || x == component.x + BOX_WIDTH - 1 {
-                "+"
+            let (top, bottom) = if x == component.x {
+                ("┌", "└")
+            } else if x == component.x + BOX_WIDTH - 1 {
+                ("┐", "┘")
             } else {
-                "-"
+                ("─", "─")
             };
             put(
                 buf,
@@ -116,7 +189,7 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
                 x,
                 component.y,
                 (app.pan_x, app.pan_y),
-                edge,
+                top,
                 style,
             );
             put(
@@ -125,7 +198,7 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
                 x,
                 component.y + 2,
                 (app.pan_x, app.pan_y),
-                edge,
+                bottom,
                 style,
             );
         }
@@ -135,7 +208,7 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
             component.x,
             component.y + 1,
             (app.pan_x, app.pan_y),
-            "|",
+            "│",
             style,
         );
         put(
@@ -144,7 +217,7 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
             component.x + BOX_WIDTH - 1,
             component.y + 1,
             (app.pan_x, app.pan_y),
-            "|",
+            "│",
             style,
         );
         let name = if component.cycle {
@@ -193,8 +266,11 @@ fn details(app: &App<'_>) -> Vec<Line<'static>> {
         app.name(id),
         role(graph.role)
     ))];
-    if !app.root_kind(id).is_empty() {
-        lines.push(Line::from(format!("Change: {}", app.root_kind(id))));
+    if let Some(root) = app.root().filter(|root| root.id == *id) {
+        lines.push(Line::styled(
+            format!("Change: {}", kind(root.kind)),
+            change_style(root.kind),
+        ));
     }
     if let Some(symbol) = &node.symbol {
         lines.push(Line::from(format!("Kind: {:?}", symbol.kind)));
@@ -384,13 +460,16 @@ pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
     let from = app.root_index.saturating_sub(list_height.saturating_sub(1));
     let mut entries = Vec::new();
     for (index, root) in app.roots.iter().enumerate().skip(from).take(list_height) {
-        entries.push(Line::from(format!(
-            "{} [{}] {} {}",
-            if index == app.root_index { ">" } else { " " },
-            kind(root.kind),
-            role(root.role),
-            truncate(&app.name_for_root(root), 12)
-        )));
+        entries.push(Line::styled(
+            format!(
+                "{} [{}] {} {}",
+                if index == app.root_index { ">" } else { " " },
+                kind(root.kind),
+                role(root.role),
+                truncate(&app.name_for_root(root), 12)
+            ),
+            change_style(root.kind),
+        ));
     }
     if entries.is_empty() {
         entries.push(Line::from("No changed symbols"));

@@ -104,12 +104,14 @@ pub fn run(session: &AnalysisSession, mode: &CompareMode, depth: usize) -> io::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::SymbolChangeKind;
     use crate::cli::{AnalyzeOptions, LocalArgs};
     use crate::git::{
         CaptureResult, CapturedFile, CapturedSnapshot, SnapshotKind, SnapshotPair, SnapshotRole,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::backend::TestBackend;
+    use ratatui::style::{Color, Modifier};
     use std::collections::BTreeMap;
     fn snapshot(role: SnapshotRole, files: &[(&[u8], &[u8])]) -> CapturedSnapshot {
         CapturedSnapshot {
@@ -181,8 +183,11 @@ mod tests {
         assert!(text.contains("Source:"));
         assert!(text.contains("Call evidence:"));
         assert!(
-            text.lines()
-                .any(|line| line.chars().skip(26).take(63).any(|ch| ch == '>'))
+            text.lines().skip(5).take(23).any(|line| line
+                .chars()
+                .skip(26)
+                .take(63)
+                .any(|ch| ch == '→'))
         );
         let target = [(
             b"a.py".as_slice(),
@@ -261,6 +266,77 @@ mod tests {
         assert_eq!(app.layout.order.len(), 2);
     }
     #[test]
+    fn diff_colors_follow_kind_across_list_graph_and_details() {
+        let base = [(
+            b"a.py".as_slice(),
+            b"def gone(): pass\ndef changed(): return 1\n".as_slice(),
+        )];
+        let target = [(
+            b"a.py".as_slice(),
+            b"def changed(): return 2\ndef fresh(): pass\ndef caller(): fresh()\n".as_slice(),
+        )];
+        let fixture = session(&base, &target);
+        let mode = mode();
+        for (kind, color) in [
+            (SymbolChangeKind::Added, Color::Green),
+            (SymbolChangeKind::Modified, Color::Yellow),
+            (SymbolChangeKind::Deleted, Color::Red),
+        ] {
+            let mut app = state::App::new(&fixture, &mode, 1);
+            let index = app
+                .roots
+                .iter()
+                .position(|root| {
+                    root.kind == kind
+                        && (kind != SymbolChangeKind::Added || app.name_for_root(root) == "fresh")
+                })
+                .unwrap();
+            for _ in 0..index {
+                app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+            }
+            let root = app.root().unwrap();
+            assert_eq!(root.kind, kind);
+            let component = app
+                .layout
+                .components
+                .iter()
+                .find(|component| component.members.contains(&root.id))
+                .unwrap();
+            let graph_x = (26 + component.x - app.pan_x) as u16;
+            let graph_y = (5 + component.y - app.pan_y) as u16;
+            let mut terminal = Terminal::new(TestBackend::new(180, 30)).unwrap();
+            terminal.draw(|frame| render::render(&app, frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            for (row, entry) in app.roots.iter().enumerate() {
+                let expected = match entry.kind {
+                    SymbolChangeKind::Added => Color::Green,
+                    SymbolChangeKind::Deleted => Color::Red,
+                    SymbolChangeKind::Modified => Color::Yellow,
+                };
+                assert_eq!(buffer[(2, 5 + row as u16)].fg, expected);
+            }
+            let box_cell = &buffer[(graph_x, graph_y)];
+            assert_eq!(box_cell.symbol(), "┌");
+            assert_eq!(box_cell.fg, color);
+            assert!(box_cell.modifier.contains(Modifier::REVERSED));
+            assert_eq!(buffer[(150, 6)].symbol(), "C");
+            assert_eq!(buffer[(150, 6)].fg, color);
+            for caller in app
+                .layout
+                .components
+                .iter()
+                .filter(|component| !component.members.contains(&root.id))
+            {
+                let x = (26 + caller.x - app.pan_x) as u16;
+                let y = (5 + caller.y - app.pan_y) as u16;
+                if x < 149 && y < 28 {
+                    assert_eq!(buffer[(x, y)].fg, Color::Reset);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn shared_callers_are_drawn_once_with_all_connectors() {
         let target = [(
             b"a.py".as_slice(),
@@ -281,7 +357,57 @@ mod tests {
         assert_eq!(app.layout.components.len(), 4);
         assert_eq!(app.layout.edges.len(), 4);
         assert_eq!(app.layout.order.len(), 4);
-        assert!(screen(&app, 120, 30).contains("Graph: caller -> callee"));
+        app.pan_x = 0;
+        app.pan_y = 0;
+        let text = screen(&app, 180, 30);
+        assert!(text.contains("Graph: caller -> callee"));
+        let graph_at = |text: &str, x: usize, y: usize| {
+            text.lines()
+                .nth(y + 5)
+                .unwrap()
+                .chars()
+                .nth(x + 26)
+                .unwrap()
+        };
+        assert_eq!(graph_at(&text, 29, 1), '┬');
+        assert_eq!(graph_at(&text, 29, 7), '└');
+        assert_eq!(graph_at(&text, 63, 1), '┬');
+        assert_eq!(graph_at(&text, 63, 7), '┘');
+        assert_eq!(graph_at(&text, 33, 1), '→');
+        assert_eq!(graph_at(&text, 33, 7), '→');
+        assert_eq!(graph_at(&text, 67, 1), '→');
+        assert_eq!(
+            text.lines()
+                .skip(5)
+                .take(23)
+                .flat_map(|line| line.chars().skip(26).take(122).collect::<Vec<_>>())
+                .filter(|&ch| ch == '→')
+                .count(),
+            3
+        );
+        for (x, y) in [(0, 0), (34, 0), (34, 6), (68, 0)] {
+            assert_eq!(graph_at(&text, x, y), '┌');
+            assert_eq!(graph_at(&text, x + 25, y), '┐');
+            assert_eq!(graph_at(&text, x, y + 2), '└');
+            assert_eq!(graph_at(&text, x + 25, y + 2), '┘');
+        }
+        assert!(text.contains("shared"));
+        assert!(text.contains("root"));
+
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        for _ in 0..2 {
+            app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        }
+        assert_eq!(app.pan_x, 28);
+        let selected = app.selected_node.as_ref().unwrap();
+        let name = app.name(selected);
+        let panned = screen(&app, 180, 30);
+        assert!(panned.contains(&name));
+        assert_eq!(graph_at(&panned, 0, 1), '─');
+        assert_eq!(graph_at(&panned, (29 - app.pan_x) as usize, 1), '┬');
+        assert_eq!(graph_at(&panned, (63 - app.pan_x) as usize, 7), '┘');
+        assert_eq!(panned.lines().nth(6).unwrap().chars().nth(25), Some('│'));
     }
     #[test]
     fn rust_changed_and_deleted_roots_render_captured_source_and_callers() {

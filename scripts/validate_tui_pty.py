@@ -46,6 +46,8 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
     before = termios.tcgetattr(slave)
     env = os.environ.copy()
+    env.pop("NO_COLOR", None)
+    env["TERM"] = "xterm-256color"
     if fault:
         env["DFLOW_INTERNAL_TUI_FAULT"] = fault
     process = subprocess.Popen(
@@ -60,6 +62,8 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
         output = collect(master, process, marker)
         if marker is not None and marker not in output:
             raise AssertionError(f"TUI marker {marker!r} did not appear")
+        if marker is not None:
+            output += collect(master, process, None, 0.2)
         if resize:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 100, 0, 0))
             os.kill(process.pid, signal.SIGWINCH)
@@ -103,6 +107,8 @@ def main() -> None:
 
         code, output = run_case(binary, root, marker=b"Graph", keys=b"q", resize=True, help_key=True)
         assert code == 0 and b"complete" in output
+        assert "─".encode() in output, "normal graph did not draw box lines"
+        assert b"\x1b[38;5;3;49m" in output, "modified change did not receive yellow terminal styling"
 
         source.write_text("def f(:\n")
         code, output = run_case(binary, root, marker=b"PARTIAL", keys=b"\x03")

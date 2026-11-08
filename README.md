@@ -84,7 +84,7 @@ If both stdin and stdout are terminals, the default output is an interactive gra
 
 ### Terminal controls
 
-The left panel selects changed functions, the middle panel shows caller → callee arrows, and the right panel shows captured source and call-site evidence. Deleted roots and their callers use the **base** snapshot; added and modified roots use **target**. Cycle boxes list their members in details. The header shows the comparison and snapshot identities. A partial analysis is visibly marked.
+The left panel selects changed functions, the middle panel shows boxed nodes joined by box-drawing lines and caller → callee arrows, and the right panel shows captured source and call-site evidence. Shared routes meet at junctions; panning clips the graph without breaking visible joins. Deleted roots and their callers use the **base** snapshot; added and modified roots use **target**. Cycle boxes list their members in details. The header shows the comparison and snapshot identities. A partial analysis is visibly marked.
 
 | Key | Action |
 | --- | --- |
@@ -96,7 +96,7 @@ The left panel selects changed functions, the middle panel shows caller → call
 | `?` | Show or close help |
 | `q` or Ctrl-C | Quit |
 
-The terminal needs at least 100 columns and 16 rows for the three panels. Narrower terminals show resize guidance. Graph labels use plain ASCII for predictable cell width; full names and paths appear in details. Colors only highlight focus and selection.
+The terminal needs at least 100 columns and 16 rows for the three panels. Narrower terminals show resize guidance. Graph labels use plain ASCII for predictable cell width; renderer-owned box-drawing lines and arrows are single-cell Unicode glyphs. Full names and paths appear in details. Added changes are green, deleted changes red, and modified changes yellow in the change list, root boxes, and change details; unchanged callers and connectors retain the terminal default color. Focus and selection remain highlighted.
 
 Run the current test suite with:
 
