@@ -84,19 +84,20 @@ If both stdin and stdout are terminals, the default output is an interactive gra
 
 ### Terminal controls
 
-The left panel selects changed functions, the middle panel shows boxed nodes joined by box-drawing lines and caller → callee arrows, and the right panel shows captured source and call-site evidence. Shared routes meet at junctions; panning clips the graph without breaking visible joins. Deleted roots and their callers use the **base** snapshot; added and modified roots use **target**. Cycle boxes list their members in details. The header shows the comparison and snapshot identities. A partial analysis is visibly marked.
+The left Changes panel selects changed functions; the Graph panel fills the remaining width. Each symbol box is titled `file_name:function_name` (module boxes use the module filename), always shows its basic location, and sizes to its content rather than truncating it. Press `d` to expand or collapse details inside the selected graph node, including source and call-site evidence where available; there is no separate Details panel. Expanded boxes can be wider than the viewport, so pan to see their full contents. Shared routes meet at junctions; panning clips the graph without breaking visible joins. Deleted roots and their callers use the **base** snapshot; added and modified roots use **target**. The header shows the comparison and snapshot identities. A partial analysis is visibly marked.
 
 | Key | Action |
 | --- | --- |
-| Tab | Focus the next panel |
-| Arrow keys or `j`/`k` | Select a change or graph node; scroll details |
-| Shift+arrow keys | Pan the graph |
+| Tab | Switch focus between Changes and Graph |
+| `d` | Expand or collapse details in the selected graph node (collapsed by default) |
+| Arrow keys or `j`/`k` | Select a change or graph node |
+| Shift+arrow keys | Pan the graph to view wide nodes |
 | Page Up / Page Down | Scroll the focused panel |
 | `+` / `-` | Increase or decrease caller depth |
 | `?` | Show or close help |
 | `q` or Ctrl-C | Quit |
 
-The terminal needs at least 100 columns and 16 rows for the three panels. Narrower terminals show resize guidance. Graph labels use plain ASCII for predictable cell width; renderer-owned box-drawing lines and arrows are single-cell Unicode glyphs. Full names and paths appear in details. Added changes are green, deleted changes red, and modified changes yellow in the change list, root boxes, and change details; unchanged callers and connectors retain the terminal default color. Focus and selection remain highlighted.
+The terminal needs at least 100 columns and 16 rows. Narrower terminals show resize guidance. Renderer-owned box-drawing lines and arrows are single-cell Unicode glyphs. Added changes are green, deleted changes red, and modified changes yellow in the change list and root boxes; unchanged callers and connectors retain the terminal default color. Focus and selection remain highlighted.
 
 Run the current test suite with:
 

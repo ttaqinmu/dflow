@@ -41,7 +41,7 @@ def collect(master: int, process: subprocess.Popen[bytes], marker: bytes | None,
     return bytes(output)
 
 
-def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"", fault: str | None = None, resize: bool = False, help_key: bool = False) -> tuple[int, bytes]:
+def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"", fault: str | None = None, resize: bool = False, help_key: bool = False, expand_node: bool = False, node_title: bytes | None = None) -> tuple[int, bytes]:
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
     before = termios.tcgetattr(slave)
@@ -64,6 +64,15 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
             raise AssertionError(f"TUI marker {marker!r} did not appear")
         if marker is not None:
             output += collect(master, process, None, 0.2)
+        if expand_node:
+            assert b"Details" not in output, "separate Details panel appeared initially"
+            assert node_title is not None and node_title in output, "node title was not visible"
+            assert b"Location:" in output, "collapsed node location was not visible"
+            os.write(master, b"d")
+            expanded_output = collect(master, process, b"Source:")
+            assert b"Source:" in expanded_output, "d did not expand source inside the selected node"
+            assert b"Details" not in expanded_output, "separate Details panel appeared after d"
+            output += expanded_output
         if resize:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 100, 0, 0))
             os.kill(process.pid, signal.SIGWINCH)
@@ -105,7 +114,7 @@ def main() -> None:
         git(root, "commit", "-m", "base")
         source.write_text("def f(): return 2\n")
 
-        code, output = run_case(binary, root, marker=b"Graph", keys=b"q", resize=True, help_key=True)
+        code, output = run_case(binary, root, marker=b"Graph", keys=b"q", resize=True, help_key=True, expand_node=True, node_title=b"a.py:f")
         assert code == 0 and b"complete" in output
         assert "─".encode() in output, "normal graph did not draw box lines"
         assert b"\x1b[38;5;3;49m" in output, "modified change did not receive yellow terminal styling"
@@ -130,10 +139,10 @@ def main() -> None:
         git(root, "add", "a.py", "Cargo.toml", "src/lib.rs")
         git(root, "commit", "-m", "rust base")
         rust_source.write_text("pub fn rust_root() -> i32 { 2 }\npub fn caller() -> i32 { rust_root() }\n")
-        code, output = run_case(binary, root, marker=b"rust_root", keys=b"q")
+        code, output = run_case(binary, root, marker=b"Graph", keys=b"q", expand_node=True, node_title=b"lib.rs:rust_root")
         assert code == 0 and b"rust_root" in output
 
-        print("PTY: Python and Rust normal, help, resize, partial Ctrl-C, panic, error, and terminal restoration passed")
+        print("PTY: Python and Rust inline node expansion, help, resize, partial Ctrl-C, panic, error, and terminal restoration passed")
 
 
 if __name__ == "__main__":

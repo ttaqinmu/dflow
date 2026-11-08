@@ -80,7 +80,7 @@ pub fn run(session: &AnalysisSession, mode: &CompareMode, depth: usize) -> io::R
             let viewport = Rect::new(
                 0,
                 0,
-                size.width.saturating_sub(58),
+                size.width.saturating_sub(27),
                 size.height.saturating_sub(8),
             );
             app.clamp(viewport);
@@ -168,6 +168,32 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n")
     }
+    fn node_line(
+        app: &state::App<'_>,
+        text: &str,
+        component: &layout::Component,
+        row: i32,
+    ) -> String {
+        let x = (26 + component.x - app.pan_x) as usize;
+        let y = (5 + component.y - app.pan_y + row) as usize;
+        text.lines()
+            .nth(y)
+            .unwrap()
+            .chars()
+            .skip(x + 1)
+            .take((component.width - 2) as usize)
+            .collect::<String>()
+            .trim_end()
+            .to_owned()
+    }
+    fn selected_component<'a>(app: &'a state::App<'_>, selected: &str) -> &'a layout::Component {
+        app.layout
+            .components
+            .iter()
+            .find(|component| component.members.iter().any(|id| id == selected))
+            .unwrap()
+    }
+
     #[test]
     fn graph_renders_arrow_labels_evidence_and_cycle_members() {
         let target = [(
@@ -179,9 +205,19 @@ mod tests {
         let app = state::App::new(&fixture, &mode, 1);
         let text = screen(&app, 120, 30);
         assert!(text.contains("Graph: caller -> callee"));
-        assert!(text.contains("[target] added"));
-        assert!(text.contains("Source:"));
-        assert!(text.contains("Call evidence:"));
+        assert!(!text.contains("Call evidence:"));
+        assert!(!text.contains("Details"));
+        let selected = app.selected_node.as_ref().unwrap();
+        let root = app
+            .layout
+            .components
+            .iter()
+            .find(|component| component.members.contains(selected))
+            .unwrap();
+        assert_eq!(node_line(&app, &text, root, 1), root.title);
+        assert_eq!(node_line(&app, &text, root, 3), root.description);
+        assert!(root.width >= root.title.chars().count() as i32 + 2);
+        assert_eq!(root.height, 5);
         assert!(
             text.lines().skip(5).take(23).any(|line| line
                 .chars()
@@ -189,12 +225,17 @@ mod tests {
                 .take(63)
                 .any(|ch| ch == '→'))
         );
+        let mut app = app;
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        let text = screen(&app, 120, 30);
+        assert!(text.contains("Source:"));
+        assert!(text.contains("Call evidence:"));
         let target = [(
             b"a.py".as_slice(),
             b"def a(): b()\ndef b(): a()\n".as_slice(),
         )];
         let cycle_session = session(&[], &target);
-        let cycle_app = state::App::new(&cycle_session, &mode, 2);
+        let mut cycle_app = state::App::new(&cycle_session, &mode, 2);
         assert!(
             cycle_app
                 .layout
@@ -202,8 +243,44 @@ mod tests {
                 .iter()
                 .any(|component| component.cycle)
         );
+        let selected = cycle_app.selected_node.as_ref().unwrap();
+        let cycle = cycle_app
+            .layout
+            .components
+            .iter()
+            .find(|component| component.members.contains(selected))
+            .unwrap();
+        let cycle_text = screen(&cycle_app, 120, 30);
+        assert_eq!(node_line(&cycle_app, &cycle_text, cycle, 1), cycle.title);
+        assert_eq!(
+            node_line(&cycle_app, &cycle_text, cycle, 3),
+            cycle.description
+        );
+        cycle_app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         assert!(screen(&cycle_app, 120, 30).contains("Cycle members:"));
     }
+    #[test]
+    fn module_caller_box_shows_its_name_without_type_prefix() {
+        let target = [(b"a.py".as_slice(), b"def f(): pass\nf()\n".as_slice())];
+        let fixture = session(&[], &target);
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 1);
+        app.pan_x = 0;
+        app.pan_y = 0;
+        let graph = app.graph().unwrap();
+        let module = app
+            .layout
+            .components
+            .iter()
+            .find(|component| {
+                graph.graph[graph.ids[&component.members[0]]]
+                    .symbol
+                    .is_none()
+            })
+            .unwrap();
+        assert_eq!(node_line(&app, &screen(&app, 120, 30), module, 1), "a.py");
+    }
+
     #[test]
     fn reducer_changes_depth_focus_selection_and_exits() {
         let target = [(
@@ -219,6 +296,8 @@ mod tests {
         assert_eq!(app.layout.order.len(), 2);
         app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert!(matches!(app.focus, state::Focus::Graph));
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(matches!(app.focus, state::Focus::Changes));
         app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         assert!(app.selected_node.is_some());
         app.handle_key(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE));
@@ -229,6 +308,60 @@ mod tests {
         assert!(app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
     }
     #[test]
+    fn expanding_selected_node_grows_box_without_overlap_and_tab_has_two_stops() {
+        let target = [(
+            b"a.py".as_slice(),
+            b"def f(): pass\ndef g(): f()\n".as_slice(),
+        )];
+        let fixture = session(&[], &target);
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 1);
+        let selected = app.selected_node.clone().unwrap();
+        let original = selected_component(&app, &selected);
+        let (original_width, original_height) = (original.width, original.height);
+        let hidden = screen(&app, 180, 40);
+        assert!(!hidden.contains("Source:"));
+        assert_eq!(original_height, 5);
+        assert!(original_width >= 26);
+        assert_eq!(node_line(&app, &hidden, original, 3), original.description);
+        assert_eq!(hidden.lines().nth(6).unwrap().chars().nth(179), Some('│'));
+
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(matches!(app.focus, state::Focus::Graph));
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        let expanded = selected_component(&app, &selected);
+        assert!(expanded.height > original_height);
+        assert!(expanded.extra.iter().any(|line| line.contains("Source:")));
+        let shown = screen(&app, 180, 40);
+        assert!(shown.contains("Source:"));
+        assert!(shown.contains("Path:"));
+        assert_eq!(node_line(&app, &shown, expanded, 1), expanded.title);
+        for other in app
+            .layout
+            .components
+            .iter()
+            .filter(|other| !other.members.contains(&selected))
+        {
+            assert!(
+                expanded.x + expanded.width <= other.x
+                    || other.x + other.width <= expanded.x
+                    || expanded.y + expanded.height <= other.y
+                    || other.y + other.height <= expanded.y,
+                "expanded box overlaps another node"
+            );
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(matches!(app.focus, state::Focus::Changes));
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert!(matches!(app.focus, state::Focus::Graph));
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        assert_eq!(selected_component(&app, &selected).height, original_height);
+        assert!(selected_component(&app, &selected).extra.is_empty());
+        assert_eq!(app.selected_node.as_ref(), Some(&selected));
+        assert!(!screen(&app, 180, 40).contains("Source:"));
+    }
+
+    #[test]
     fn empty_partial_and_small_terminal_are_explicit() {
         let mode = mode();
         let empty = session(&[], &[]);
@@ -236,7 +369,8 @@ mod tests {
         assert!(screen(&app, 120, 30).contains("No changed symbols"));
         assert!(screen(&app, 70, 12).contains("Terminal too small"));
         let bad = session(&[], &[(b"bad.py", b"def f(:\n")]);
-        let app = state::App::new(&bad, &mode, 1);
+        let mut app = state::App::new(&bad, &mode, 1);
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let text = screen(&app, 120, 30);
         assert!(text.contains("PARTIAL analysis"));
         assert!(text.contains("Diagnostics:"));
@@ -259,14 +393,26 @@ mod tests {
         for _ in 0..deleted {
             app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         }
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        let selected = app.selected_node.as_ref().unwrap();
+        let root = app
+            .layout
+            .components
+            .iter()
+            .find(|component| component.members.contains(selected))
+            .unwrap();
+        assert_eq!(
+            node_line(&app, &screen(&app, 120, 30), root, 1),
+            "a.py:removed"
+        );
         let text = screen(&app, 120, 30);
-        assert!(text.contains("[base] deleted"));
+        assert!(text.contains("[deleted] base"));
         assert!(text.contains("Change: deleted"));
         assert!(text.contains("called by"));
         assert_eq!(app.layout.order.len(), 2);
     }
     #[test]
-    fn diff_colors_follow_kind_across_list_graph_and_details() {
+    fn diff_colors_follow_kind_across_list_and_graph() {
         let base = [(
             b"a.py".as_slice(),
             b"def gone(): pass\ndef changed(): return 1\n".as_slice(),
@@ -294,6 +440,7 @@ mod tests {
             for _ in 0..index {
                 app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
             }
+            app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
             let root = app.root().unwrap();
             assert_eq!(root.kind, kind);
             let component = app
@@ -319,8 +466,6 @@ mod tests {
             assert_eq!(box_cell.symbol(), "┌");
             assert_eq!(box_cell.fg, color);
             assert!(box_cell.modifier.contains(Modifier::REVERSED));
-            assert_eq!(buffer[(150, 6)].symbol(), "C");
-            assert_eq!(buffer[(150, 6)].fg, color);
             for caller in app
                 .layout
                 .components
@@ -334,6 +479,57 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn selected_node_title_padding_uses_the_same_background_as_its_text() {
+        let target = [(
+            b"a.py".as_slice(),
+            b"def f(): pass\ndef g(): f()\n".as_slice(),
+        )];
+        let fixture = session(&[], &target);
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 1);
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        for _ in 0..2 {
+            terminal.draw(|frame| render::render(&app, frame)).unwrap();
+            let component = selected_component(&app, app.selected_node.as_ref().unwrap());
+            let title_y = (6 + component.y - app.pan_y) as u16;
+            let padding_start =
+                (27 + component.x - app.pan_x) as u16 + component.title.len() as u16;
+            let right = (26 + component.x + component.width - 1 - app.pan_x) as u16;
+            assert!(padding_start < right);
+            for x in padding_start..right {
+                let cell = &terminal.backend().buffer()[(x, title_y)];
+                assert_eq!(cell.symbol(), " ");
+                assert_eq!(cell.fg, Color::Green);
+                assert!(cell.modifier.contains(Modifier::REVERSED));
+            }
+            app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        terminal.draw(|frame| render::render(&app, frame)).unwrap();
+        let former = app
+            .layout
+            .components
+            .iter()
+            .find(|component| component.title == "a.py:f")
+            .unwrap();
+        let x = (27 + former.x - app.pan_x) as u16 + former.title.len() as u16;
+        let y = (6 + former.y - app.pan_y) as u16;
+        let cell = &terminal.backend().buffer()[(x, y)];
+        assert_eq!(cell.symbol(), " ");
+        assert_eq!(cell.fg, Color::Green);
+        assert!(!cell.modifier.contains(Modifier::REVERSED));
+        let selected = selected_component(&app, app.selected_node.as_ref().unwrap());
+        let x = (27 + selected.x - app.pan_x) as u16 + selected.title.len() as u16;
+        let y = (6 + selected.y - app.pan_y) as u16;
+        assert!(
+            terminal.backend().buffer()[(x, y)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
     }
 
     #[test]
@@ -369,13 +565,60 @@ mod tests {
                 .nth(x + 26)
                 .unwrap()
         };
-        assert_eq!(graph_at(&text, 29, 1), '┬');
-        assert_eq!(graph_at(&text, 29, 7), '└');
-        assert_eq!(graph_at(&text, 63, 1), '┬');
-        assert_eq!(graph_at(&text, 63, 7), '┘');
-        assert_eq!(graph_at(&text, 33, 1), '→');
-        assert_eq!(graph_at(&text, 33, 7), '→');
-        assert_eq!(graph_at(&text, 67, 1), '→');
+        let shared = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "a.py:shared")
+            .unwrap();
+        let first_lane = shared.x + shared.width + 3;
+        let middle = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "a.py:a")
+            .unwrap();
+        let second_lane = middle.x + middle.width + 3;
+        let lower = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "a.py:b")
+            .unwrap();
+        assert_eq!(
+            graph_at(&text, first_lane as usize, (shared.y + 1) as usize),
+            '┬'
+        );
+        assert_eq!(
+            graph_at(&text, first_lane as usize, (lower.y + 1) as usize),
+            '└'
+        );
+        assert_eq!(
+            graph_at(&text, second_lane as usize, (middle.y + 1) as usize),
+            '┬'
+        );
+        assert_eq!(
+            graph_at(&text, second_lane as usize, (lower.y + 1) as usize),
+            '┘'
+        );
+        assert_eq!(
+            graph_at(&text, (middle.x - 1) as usize, (middle.y + 1) as usize),
+            '→'
+        );
+        assert_eq!(
+            graph_at(&text, (lower.x - 1) as usize, (lower.y + 1) as usize),
+            '→'
+        );
+        let root = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "a.py:root")
+            .unwrap();
+        assert_eq!(
+            graph_at(&text, (root.x - 1) as usize, (root.y + 1) as usize),
+            '→'
+        );
         assert_eq!(
             text.lines()
                 .skip(5)
@@ -385,11 +628,20 @@ mod tests {
                 .count(),
             3
         );
-        for (x, y) in [(0, 0), (34, 0), (34, 6), (68, 0)] {
+        for component in &app.layout.components {
+            let (x, y) = (component.x as usize, component.y as usize);
             assert_eq!(graph_at(&text, x, y), '┌');
-            assert_eq!(graph_at(&text, x + 25, y), '┐');
-            assert_eq!(graph_at(&text, x, y + 2), '└');
-            assert_eq!(graph_at(&text, x + 25, y + 2), '┘');
+            assert_eq!(graph_at(&text, x + component.width as usize - 1, y), '┐');
+            assert_eq!(graph_at(&text, x, y + component.height as usize - 1), '└');
+            assert_eq!(
+                graph_at(
+                    &text,
+                    x + component.width as usize - 1,
+                    y + component.height as usize - 1
+                ),
+                '┘'
+            );
+            assert_eq!(node_line(&app, &text, component, 1), component.title);
         }
         assert!(text.contains("shared"));
         assert!(text.contains("root"));
@@ -399,16 +651,73 @@ mod tests {
         for _ in 0..2 {
             app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
         }
-        assert_eq!(app.pan_x, 28);
-        let selected = app.selected_node.as_ref().unwrap();
-        let name = app.name(selected);
+        assert!(app.pan_x > 0);
         let panned = screen(&app, 180, 30);
-        assert!(panned.contains(&name));
-        assert_eq!(graph_at(&panned, 0, 1), '─');
-        assert_eq!(graph_at(&panned, (29 - app.pan_x) as usize, 1), '┬');
-        assert_eq!(graph_at(&panned, (63 - app.pan_x) as usize, 7), '┘');
+        assert!(
+            panned.contains(&selected_component(&app, app.selected_node.as_ref().unwrap()).title)
+        );
+        assert!(panned.contains('─'));
+        assert!(panned.contains('→'));
         assert_eq!(panned.lines().nth(6).unwrap().chars().nth(25), Some('│'));
     }
+    #[test]
+    fn expanded_node_reflows_same_column_and_follows_graph_selection() {
+        let target = [(
+            b"a.py".as_slice(),
+            b"def root(): pass\ndef a(): root()\ndef b(): root()\ndef shared(): a(); b()\n"
+                .as_slice(),
+        )];
+        let fixture = session(&[], &target);
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 2);
+        let root_index = app
+            .roots
+            .iter()
+            .position(|root| app.name_for_root(root) == "root")
+            .unwrap();
+        for _ in 0..root_index {
+            app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        for _ in 0..2 {
+            app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        }
+        let first = selected_component(&app, app.selected_node.as_ref().unwrap());
+        assert_eq!(first.title, "a.py:a");
+        let other_y = app
+            .layout
+            .components
+            .iter()
+            .find(|component| component.title == "a.py:b")
+            .unwrap()
+            .y;
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        let first = selected_component(&app, app.selected_node.as_ref().unwrap());
+        let other = app
+            .layout
+            .components
+            .iter()
+            .find(|component| component.title == "a.py:b")
+            .unwrap();
+        assert!(first.height > 5);
+        assert!(other.y > other_y);
+        assert!(other.y >= first.y + first.height + 3);
+
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let second = selected_component(&app, app.selected_node.as_ref().unwrap());
+        assert_eq!(second.title, "a.py:b");
+        assert!(second.height > 5);
+        assert_eq!(
+            app.layout
+                .components
+                .iter()
+                .find(|component| component.title == "a.py:a")
+                .unwrap()
+                .height,
+            5
+        );
+    }
+
     #[test]
     fn rust_changed_and_deleted_roots_render_captured_source_and_callers() {
         let manifest = (
@@ -431,10 +740,27 @@ mod tests {
         for _ in 0..changed {
             app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         }
-        let changed_text = screen(&app, 120, 30);
-        assert!(changed_text.contains("rust_root"));
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        let selected = app.selected_node.as_ref().unwrap();
+        let root = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.members.contains(selected))
+            .unwrap();
+        assert_eq!(root.title, "lib.rs:rust_root");
+        assert!(root.width >= root.title.chars().count() as i32 + 2);
+        let changed_text = screen(&app, 180, 40);
+        assert_eq!(node_line(&app, &changed_text, root, 1), "lib.rs:rust_root");
         assert!(changed_text.contains("Source:"));
         assert!(changed_text.contains("Call evidence:"));
+        assert!(
+            !root
+                .extra
+                .iter()
+                .any(|line| line.contains("Cargo.toml:bin:"))
+        );
+        assert!(changed_text.contains("src/lib.rs"));
         assert_eq!(app.layout.order.len(), 2);
         let deleted = app
             .roots
@@ -448,9 +774,37 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
         }
         let deleted_text = screen(&app, 120, 30);
-        assert!(deleted_text.contains("[base] deleted"));
+        assert!(deleted_text.contains("[deleted] base"));
         assert!(deleted_text.contains("gone"));
         assert_eq!(app.layout.order.len(), 2);
+    }
+
+    #[test]
+    fn long_rust_function_name_fits_box_and_is_reachable_by_panning() {
+        let name = format!("function_{}", "identifying_segment_".repeat(8));
+        let before = format!("pub fn {name}() -> i32 {{ 1 }}\n");
+        let after = format!("pub fn {name}() -> i32 {{ 2 }}\n");
+        let manifest = b"[package]\nname='long-title'\nversion='0.1.0'\n";
+        let fixture = session(
+            &[
+                (b"Cargo.toml", manifest),
+                (b"src/lib.rs", before.as_bytes()),
+            ],
+            &[(b"Cargo.toml", manifest), (b"src/lib.rs", after.as_bytes())],
+        );
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 1);
+        let component = selected_component(&app, app.selected_node.as_ref().unwrap());
+        assert_eq!(component.title, format!("lib.rs:{name}"));
+        assert!(component.width >= component.title.len() as i32 + 2);
+        assert!(component.width > 93);
+        app.pan_x = i32::MAX;
+        app.clamp(Rect::new(0, 0, 93, 22));
+        let component = selected_component(&app, app.selected_node.as_ref().unwrap());
+        let text = screen(&app, 120, 30);
+        assert!(text.contains(&name[name.len() - 20..]));
+        let right = (26 + component.x + component.width - 1 - app.pan_x) as usize;
+        assert_eq!(text.lines().nth(6).unwrap().chars().nth(right), Some('│'));
     }
 
     #[test]
