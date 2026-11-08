@@ -64,7 +64,7 @@ impl<'a> App<'a> {
                 };
                 graph
                     .symbol_ids
-                    .get(&(symbol.source.path.clone(), symbol.scope_id))
+                    .get(&(symbol.unit.clone(), symbol.scope_id))
                     .map(|id| Root {
                         id: id.clone(),
                         kind: change.kind,

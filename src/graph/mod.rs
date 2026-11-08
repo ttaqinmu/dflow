@@ -1,4 +1,4 @@
-use crate::analysis::{ExtractedSnapshot, ParsedFile, ScopeKind, SourceRef, Symbol};
+use crate::analysis::{ExtractedSnapshot, ParsedFile, ScopeKind, SourceRef, SourceUnitKey, Symbol};
 use crate::git::SnapshotRole;
 use crate::languages::{Resolution, ResolverRegistry, UnresolvedReason};
 use petgraph::Direction::Incoming;
@@ -26,7 +26,7 @@ pub struct SnapshotGraph {
     pub role: SnapshotRole,
     pub graph: StableDiGraph<GraphNode, Vec<String>>,
     pub ids: BTreeMap<String, NodeIndex>,
-    pub symbol_ids: BTreeMap<(Vec<u8>, usize), String>,
+    pub symbol_ids: BTreeMap<(SourceUnitKey, usize), String>,
     pub calls: Vec<CallRecord>,
 }
 #[derive(Debug)]
@@ -57,7 +57,7 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
     let mut symbol_ids = BTreeMap::new();
     let mut module_ids = BTreeMap::new();
     let mut serial = 0usize;
-    for (path, file) in &snapshot.files {
+    for (unit, file) in &snapshot.files {
         if !file.valid {
             continue;
         }
@@ -68,10 +68,10 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
             graph.add_node(GraphNode {
                 id: module_id.clone(),
                 symbol: None,
-                module_path: Some(path.clone()),
+                module_path: Some(unit.path.clone()),
             }),
         );
-        module_ids.insert(path.clone(), module_id);
+        module_ids.insert(unit.clone(), module_id);
         for symbol in &file.symbols {
             let id = format!("s-{}-{serial:06}", role_code(snapshot.role));
             serial += 1;
@@ -83,30 +83,30 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
                     module_path: None,
                 }),
             );
-            symbol_ids.insert((path.clone(), symbol.scope_id), id);
+            symbol_ids.insert((unit.clone(), symbol.scope_id), id);
         }
     }
     let resolver = ResolverRegistry::new(snapshot);
     let mut calls = Vec::new();
     let mut call_serial = 0usize;
-    for (path, file) in &snapshot.files {
+    for (unit, file) in &snapshot.files {
         if !file.valid {
             continue;
         }
         for call in &file.calls {
             let owner_scope = caller_scope(file, call.scope_id);
             let caller = if owner_scope == 0 {
-                module_ids[path].clone()
+                module_ids[unit].clone()
             } else {
                 symbol_ids
-                    .get(&(path.clone(), owner_scope))
+                    .get(&(unit.clone(), owner_scope))
                     .cloned()
-                    .unwrap_or_else(|| module_ids[path].clone())
+                    .unwrap_or_else(|| module_ids[unit].clone())
             };
             let (target, reason) = match resolver.resolve(file, call) {
                 Resolution::Resolved(symbol) => (
                     symbol_ids
-                        .get(&(symbol.source.path.clone(), symbol.scope_id))
+                        .get(&(symbol.unit.clone(), symbol.scope_id))
                         .cloned(),
                     None,
                 ),

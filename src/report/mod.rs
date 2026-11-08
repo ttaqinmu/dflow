@@ -62,12 +62,12 @@ impl AnalysisSession {
             let before = change.before.as_ref().and_then(|s| {
                 self.base_graph
                     .symbol_ids
-                    .get(&(s.source.path.clone(), s.scope_id))
+                    .get(&(s.unit.clone(), s.scope_id))
             });
             let after = change.after.as_ref().and_then(|s| {
                 self.target_graph
                     .symbol_ids
-                    .get(&(s.source.path.clone(), s.scope_id))
+                    .get(&(s.unit.clone(), s.scope_id))
             });
             let kind = match change.kind {
                 SymbolChangeKind::Added => "added",
@@ -89,7 +89,11 @@ impl AnalysisSession {
         let mut edges: Vec<_> = [&self.base_graph,&self.target_graph].into_iter().flat_map(|g|g.graph.edge_references().map(|e|json!({"caller":g.graph[e.source()].id,"callee":g.graph[e.target()].id,"snapshot":role(g.role),"call_sites":e.weight()})).collect::<Vec<_>>()).collect();
         edges.sort_by_key(|edge| serde_json::to_string(edge).unwrap_or_default());
         let mut diagnostics: Vec<Value> = self.capture.diagnostics.iter().map(|d|json!({"category":"git","message":d.message,"path":path(&d.path),"snapshot":null,"range":null,"affects_completeness":true})).collect();
-        diagnostics.extend(self.base.diagnostics.iter().chain(&self.target.diagnostics).map(|d| json!({"category":snake(&format!("{:?}",d.kind)),"message":d.message,"path":path(&d.path),"snapshot":role(d.snapshot),"range":d.range.map(range),"affects_completeness":matches!(d.kind,analysis::DiagnosticKind::ParseError|analysis::DiagnosticKind::InvalidEncoding)})));
+        diagnostics.extend(self.base.diagnostics.iter().chain(&self.target.diagnostics).map(|d| {
+            let rust_layout = matches!(d.kind, analysis::DiagnosticKind::UnsupportedLayout | analysis::DiagnosticKind::ModuleAmbiguity)
+                && (d.path.ends_with(b".rs") || d.path.ends_with(b"Cargo.toml"));
+            json!({"category":snake(&format!("{:?}",d.kind)),"message":d.message,"path":path(&d.path),"snapshot":role(d.snapshot),"range":d.range.map(range),"affects_completeness":matches!(d.kind,analysis::DiagnosticKind::ParseError|analysis::DiagnosticKind::InvalidEncoding) || rust_layout})
+        }));
         diagnostics.extend(self.changes.diagnostics.iter().map(|d| json!({"category":snake(&format!("{:?}",d.kind)),"message":d.message,"path":path(&d.path),"snapshot":role(d.snapshot),"range":d.range.map(range),"affects_completeness":false})));
         diagnostics.sort_by_key(|d| serde_json::to_string(d).unwrap_or_default());
         json!({"schema_version":1,"tool_version":env!("CARGO_PKG_VERSION"),"comparison":comparison,"snapshots":{"base":snapshot(&self.capture.pair.base),"target":snapshot(&self.capture.pair.target)},"file_changes":file_changes,"symbols":symbols,"module_contexts":module_contexts,"symbol_changes":symbol_changes,"call_sites":call_sites,"edges":edges,"impacts":impacts,"diagnostics":diagnostics,"complete":self.complete()})

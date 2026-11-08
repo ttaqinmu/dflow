@@ -1,8 +1,8 @@
 pub mod resolve;
 use crate::analysis::{
-    Binding, BindingKind, CallTarget, Diagnostic, DiagnosticKind, ExtractedCallSite, ImportBinding,
-    LanguageId, ParsedFile, Position, Scope, ScopeKind, SourceRange, SourceRef, Symbol, SymbolKind,
-    fingerprint,
+    Binding, BindingKind, CallTarget, Diagnostic, DiagnosticKind, DiscoveredUnit, Discovery,
+    ExtractedCallSite, ImportBinding, LanguageId, ParsedFile, Position, Scope, ScopeKind,
+    SourceRange, SourceRef, SourceUnitKey, Symbol, SymbolKind, fingerprint,
 };
 use crate::git::{CapturedFile, CapturedSnapshot, SnapshotRole};
 use crate::languages::LanguageAdapter;
@@ -162,6 +162,8 @@ impl Walker<'_> {
             kind,
             source: self.source(node),
             order: self.order,
+            conditional: false,
+            unknown_attribute: false,
         });
     }
     fn collect_names(&self, node: Node<'_>, names: &mut Vec<String>) {
@@ -268,6 +270,8 @@ impl Walker<'_> {
                 alias,
                 relative_level: level,
                 wildcard,
+                conditional: false,
+                unknown_attribute: false,
                 source: self.source(node),
             });
             if !wildcard {
@@ -364,6 +368,7 @@ impl Walker<'_> {
             let mut parts = Vec::new();
             self.canonical(outer, &mut parts);
             self.parsed.symbols.push(Symbol {
+                unit: self.parsed.unit.clone(),
                 language: LanguageId::Python,
                 source: self.source(outer),
                 scope_id,
@@ -373,6 +378,8 @@ impl Walker<'_> {
                 kind: symbol_kind,
                 fingerprint: fingerprint(parts),
                 decorated: outer.id() != inner.id(),
+                conditional: false,
+                unknown_attribute: false,
             });
         }
         // Decorators, class superclasses, and parameter defaults execute in the enclosing scope.
@@ -517,18 +524,52 @@ impl LanguageAdapter for PythonAdapter {
     fn accepts_metadata(&self, path: &[u8]) -> bool {
         path == b"pyproject.toml" || path.ends_with(b"/pyproject.toml")
     }
-    fn module_candidates(&self, snapshot: &CapturedSnapshot, path: &[u8]) -> Vec<String> {
-        python_module_candidates(snapshot, path)
+    fn discover(&self, snapshot: &CapturedSnapshot) -> Discovery {
+        let mut discovery = Discovery::default();
+        for path in snapshot
+            .files
+            .keys()
+            .filter(|path| self.accepts_source(path))
+        {
+            let modules = python_module_candidates(snapshot, path);
+            let module = (modules.len() == 1).then(|| modules[0].clone());
+            if modules.len() > 1 {
+                discovery.diagnostics.push(Diagnostic {
+                    kind: DiagnosticKind::ModuleAmbiguity,
+                    message: format!("multiple module roots: {}", modules.join(", ")),
+                    snapshot: snapshot.role,
+                    path: path.clone(),
+                    range: None,
+                });
+            } else if modules.is_empty() {
+                discovery.diagnostics.push(Diagnostic {
+                    kind: DiagnosticKind::UnsupportedLayout,
+                    message: "Module root could not be determined".into(),
+                    snapshot: snapshot.role,
+                    path: path.clone(),
+                    range: None,
+                });
+            }
+            discovery.units.push(DiscoveredUnit {
+                key: SourceUnitKey::python(path),
+                module,
+                subtree: None,
+                conditional: false,
+                unknown_attribute: false,
+            });
+        }
+        discovery
     }
     fn extract(
         &self,
         file: &CapturedFile,
         role: SnapshotRole,
-        module: Option<String>,
+        unit: &DiscoveredUnit,
     ) -> ParsedFile {
         let mut parsed = ParsedFile {
+            unit: unit.key.clone(),
             path: file.path.clone(),
-            module,
+            module: unit.module.clone(),
             language: LanguageId::Python,
             valid: true,
             scopes: Vec::new(),

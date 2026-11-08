@@ -28,13 +28,17 @@ Symbol IDs start with `s-`, module context IDs with `m-`, and call site IDs with
 
 Paths are repository relative. A UTF-8 path is `{"text":"pkg/module.py"}`. A path containing invalid UTF-8 is `{"hex":"6e616d652dff2e7079"}`; hex is the original path bytes. Consumers must decode exactly one variant and never use a lossy display path as identity.
 
+Rust source may have multiple module contexts for the same physical path when a file belongs to more than one crate target or module. Context IDs, not paths, distinguish them; a symbol's qualified name includes its manifest-relative crate target and full module scope (for example, `Cargo.toml:lib:sample::crate::worker::run`). Python qualified names and path encoding are unchanged.
+
 Ranges contain `start` and `end`, each with one-based `line`, one-based UTF-8 `byte_column`, and zero-based `byte_offset`. Ends are exclusive. A symbol carries `id`, `language`, `name`, `qualified_name`, `kind`, `snapshot`, `path`, `range`, and `fingerprint`.
 
 A call site carries `id`, `caller`, `expression`, `snapshot`, `path`, `range`, and either `target` or `unresolved_reason`. `target` is null for unresolved calls; `unresolved_reason` is null for resolved calls. An edge has `caller`, `callee`, `snapshot`, and one or more `call_sites` IDs. Callers may reference a symbol or a `module_contexts` entry. Every other referenced ID resolves within the same report and snapshot.
 
 An impact has `root`, `snapshot`, `nodes` (`id`, minimum caller `depth`) and `edges` (`caller`, `callee`). For deleted roots, all impact references use the base snapshot. Added and modified roots use the target snapshot. Depth zero contains only the root. Unresolved calls never create edges.
 
-Diagnostics carry `category`, `message`, `path`, `snapshot`, `range`, and `affects_completeness`. The last three may be null when unavailable. `complete: true` means the supported source set was captured and parsed; it does not claim that every call was resolved or that runtime behavior was proven.
+Rust calls with unknown `#[cfg]` availability or macro expansion can report `conditional_compilation` or `macro_expansion` as `unresolved_reason`. This is an open string field: consumers should preserve unfamiliar reason values instead of rejecting a v1 report. Inherent associated functions are only linked for certain same-target dispatch; receiver methods, trait dispatch, and opaque macro bodies are not inferred.
+
+Diagnostics carry `category`, `message`, `path`, `snapshot`, `range`, and `affects_completeness`. The last three may be null when unavailable. Rust missing, ambiguous, or unsupported manifest/module layouts set `affects_completeness: true` and make the report partial; equivalent preexisting Python unsupported-layout diagnostics do not change Python completeness. `complete: true` means the supported source set was captured and parsed; it does not claim that every call was resolved or that runtime behavior was proven.
 
 ## Ordering and compatibility
 

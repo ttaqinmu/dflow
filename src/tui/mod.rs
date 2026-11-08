@@ -284,6 +284,50 @@ mod tests {
         assert!(screen(&app, 120, 30).contains("Graph: caller -> callee"));
     }
     #[test]
+    fn rust_changed_and_deleted_roots_render_captured_source_and_callers() {
+        let manifest = (
+            b"Cargo.toml".as_slice(),
+            b"[package]\nname='tui-rust'\nversion='0.1.0'\n".as_slice(),
+        );
+        let before = b"pub fn rust_root() -> i32 { 1 }\npub fn gone() {}\npub fn caller() -> i32 { gone(); rust_root() }\n";
+        let after = b"pub fn rust_root() -> i32 { 2 }\npub fn caller() -> i32 { rust_root() }\n";
+        let fixture = session(
+            &[manifest, (b"src/lib.rs", before)],
+            &[manifest, (b"src/lib.rs", after)],
+        );
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 1);
+        let changed = app
+            .roots
+            .iter()
+            .position(|root| app.name_for_root(root).ends_with("::rust_root"))
+            .unwrap();
+        for _ in 0..changed {
+            app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        }
+        let changed_text = screen(&app, 120, 30);
+        assert!(changed_text.contains("rust_root"));
+        assert!(changed_text.contains("Source:"));
+        assert!(changed_text.contains("Call evidence:"));
+        assert_eq!(app.layout.order.len(), 2);
+        let deleted = app
+            .roots
+            .iter()
+            .position(|root| app.name_for_root(root).ends_with("::gone"))
+            .unwrap();
+        while app.root_index > deleted {
+            app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        }
+        while app.root_index < deleted {
+            app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        }
+        let deleted_text = screen(&app, 120, 30);
+        assert!(deleted_text.contains("[base] deleted"));
+        assert!(deleted_text.contains("gone"));
+        assert_eq!(app.layout.order.len(), 2);
+    }
+
+    #[test]
     fn repository_control_characters_are_not_rendered_as_terminal_codes() {
         assert_eq!(state::safe_text("name\u{1b}[31m\tend"), "name?[31m?end");
         let target = [(b"a.py".as_slice(), b"def f(): pass #\x1b[31m\n".as_slice())];

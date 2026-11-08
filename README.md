@@ -1,15 +1,15 @@
 # DFlow
 
-DFlow is an experimental Rust tool for exploring how changes in a Git repository affect a Python project's function call graph.
+DFlow is an experimental Rust tool for exploring how changes in a Git repository affect Python and Rust function call graphs.
 
 DFlow answers questions such as: *Which functions call the function I changed? What calls a newly added function? Who called a function before it was deleted?* It draws these relationships in the standalone CLI. A Zed integration is planned for later.
 
-> **Status:** Python MVP implementation with technical validation complete; human comparative usability testing is deferred. DFlow captures local or branch-tip Git snapshots, extracts Python symbols, resolves conservative static calls, traces callers, draws an interactive terminal graph, and emits a [versioned JSON report](docs/report-schema-v1.md). Unresolved calls remain explicit; the tool does not run repository code.
+> **Status:** Python M4 technical validation is complete; its human comparative usability study remains open. Rust M5 adds captured-manifest/module discovery and conservative static analysis without building, running, or downloading dependencies of the analyzed project. DFlow compares Git snapshots, traces certain callers, draws an interactive terminal graph, and emits a [versioned JSON report](docs/report-schema-v1.md). Unresolved calls remain explicit.
 
 ## Intended workflow
 
 1. Read two repository snapshots, such as a base commit and a target commit or working tree.
-2. Parse Python files in both snapshots and identify functions, methods, imports, and call sites.
+2. Parse captured Python and Rust source in both snapshots and identify functions, methods, imports, and call sites.
 3. Match symbols across snapshots and classify them as added, modified, or deleted.
 4. Resolve calls where possible and build a call graph for each snapshot.
 5. Trace callers around changed symbols. Deleted symbols use the graph from the earlier snapshot.
@@ -32,7 +32,7 @@ The core will keep analysis separate from presentation:
 
 ```mermaid
 flowchart TB
-    snapshots["Git snapshots"] --> symbols["Python symbols"]
+    snapshots["Git snapshots"] --> symbols["Python and Rust symbols"]
     symbols --> calls["Call resolution"]
     snapshots --> changes["Change detection"]
     calls --> report["Change and impact report"]
@@ -42,25 +42,26 @@ flowchart TB
     report --> zed["Zed integration"]
 ```
 
-The report carries symbol identity, source location, change type, call sites, and whether a call target was resolved. Python allows dynamic calls, so an unresolved target remains explicitly unresolved rather than appearing as a certain edge.
+The report carries symbol identity, source location, change type, call sites, and whether a call target was resolved. Dynamic Python calls and uncertain Rust dispatch remain explicitly unresolved rather than appearing as certain edges.
 
 This is a conceptual boundary. The current implementation stays in one Rust crate with internal modules.
 
 ## Roadmap
 
-- [x] Compare two Git snapshots and list changed Python files.
+- [x] Compare two Git snapshots and list changed Python and Rust files.
 - [x] Extract Python functions and their source ranges.
 - [x] Identify added, modified, and deleted symbols across snapshots.
 - [x] Build a call graph for direct, statically resolvable calls.
 - [x] Trace callers of changed symbols, including deleted symbols in the earlier snapshot.
 - [x] Expose a stable JSON report through the CLI.
 - [x] Draw an interactive terminal caller graph.
+- [x] Analyze static Rust crate/module graphs and conservative intra-target calls.
 - [ ] Render focused Mermaid diagrams from the report.
 - [ ] Prototype a Zed workflow using the same core analysis.
 
 Python support focuses on local calls and explicit imports. Method dispatch, dynamic imports, decorators, and runtime-generated calls require additional analysis and may remain unresolved.
 
-Supported resolution covers direct lexical calls, explicit repository imports, aliases, known relative imports, and module-qualified calls where the binding is certain. Parameters, assignments, wildcard imports, uncertain package attributes, decorators, and dynamic dispatch remain unresolved rather than creating guessed edges. JSON `unresolved_reason` values include `dynamic_target`, `shadowed`, `ambiguous_binding`, `ambiguous_target`, `missing_target`, `external_target`, `wildcard_import`, `unknown_module`, `unsupported_dispatch`, `decorated_target`, and `parse_error`. The analyzer uses captured Python source and does not execute it.
+Supported Python resolution covers direct lexical calls, explicit repository imports, aliases, known relative imports, and module-qualified calls where the binding is certain. Parameters, assignments, wildcard imports, uncertain package attributes, decorators, and dynamic dispatch remain unresolved rather than creating guessed edges. Rust resolves lexical free/nested functions, explicit `crate`/`self`/`super` module paths, static `use` aliases, and unique inherent associated functions within one crate target. Receiver/trait/UFCS dispatch, macro expansion, glob imports, re-exports, conditional compilation, unknown procedural attributes, external crates, and ambiguous bindings stay unresolved. JSON `unresolved_reason` is an open string field; [schema v1](docs/report-schema-v1.md) documents its meanings. Neither language is executed.
 
 ## Development
 
@@ -101,8 +102,8 @@ Run the current test suite with:
 cargo test
 ```
 
-The single root-level crate uses `git2` for Git snapshots. Tree-sitter parses Python source. Module discovery supports regular packages at the repository root or under `src/`, including a static setuptools `package-dir` root of `.` or `src` in `pyproject.toml`. Unsupported package layouts receive a diagnostic. Local capture includes non-ignored untracked Python files, skips symlinks and submodules, and rejects unresolved index conflicts. `petgraph` stores the call graphs; Ratatui and Crossterm draw the terminal view.
+The single root-level crate uses `git2` for Git snapshots. Tree-sitter parses Python and Rust source, including fixture-tested Rust 2018, 2021, and 2024 syntax editions (static syntax parsing, not edition-specific compiler/type checking). Python module discovery supports regular packages at the repository root or under `src/`, including a static setuptools `package-dir` root of `.` or `src` in `pyproject.toml`. Rust discovery uses captured root/workspace-member `Cargo.toml` manifests, conventional or explicit lib/bin roots, and unambiguous inline/external/`#[path]` modules; it does not expand Cargo globs, macros, build scripts, or dependencies. Missing/ambiguous Rust layouts and invalid source yield partial analysis. Local capture includes non-ignored untracked sources, skips symlinks and submodules, and rejects unresolved index conflicts. `petgraph` stores the call graphs; Ratatui and Crossterm draw the terminal view.
 
 ### Testing approach
 
-Current tests use small Python fixtures and temporary Git repositories to verify snapshot capture, symbol extraction, conservative call resolution, caller traversal, JSON references, source locations, package discovery, diagnostics, and terminal rendering. The [schema reference](docs/report-schema-v1.md) lists JSON fields and path encoding. [M4 validation](docs/m4-validation.md) records terminal, performance, and usability checks.
+Tests use small Python/Rust fixtures and temporary Git repositories to verify snapshot capture, symbol extraction, conservative call resolution, caller traversal, JSON references, source locations, package/module discovery, diagnostics, and terminal rendering. The [schema reference](docs/report-schema-v1.md) lists JSON fields and path encoding. [M4 validation](docs/m4-validation.md) records Python terminal, performance, and usability checks; [M5 validation](docs/m5-validation.md) records Rust checks and benchmarks.

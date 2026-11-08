@@ -1,6 +1,6 @@
 use crate::analysis::{
-    BindingKind, CallTarget, ExtractedCallSite, ExtractedSnapshot, ImportBinding, ParsedFile,
-    ScopeKind, Symbol,
+    BindingKind, CallTarget, ExtractedCallSite, ExtractedSnapshot, ImportBinding, LanguageId,
+    ParsedFile, ScopeKind, Symbol,
 };
 use crate::languages::{Resolution, UnresolvedReason};
 use std::collections::BTreeMap;
@@ -11,7 +11,11 @@ pub struct PythonIndex<'a> {
 impl<'a> PythonIndex<'a> {
     pub fn new(snapshot: &'a ExtractedSnapshot) -> Self {
         let mut modules: BTreeMap<&str, Vec<&ParsedFile>> = BTreeMap::new();
-        for file in snapshot.files.values().filter(|f| f.valid) {
+        for file in snapshot
+            .files
+            .values()
+            .filter(|f| f.valid && f.language == LanguageId::Python)
+        {
             if let Some(module) = &file.module {
                 modules.entry(module).or_default().push(file);
             }

@@ -117,7 +117,17 @@ def main() -> None:
         assert code == 1 and b"injected terminal error" in output
         assert output.index(b"\x1b[?1049l") < output.index(b"terminal UI error")
 
-        print("PTY: normal, help, resize, partial Ctrl-C, panic, error, and terminal restoration passed")
+        (root / "src").mkdir()
+        (root / "Cargo.toml").write_text('[package]\nname = "pty-rust"\nversion = "0.1.0"\nedition = "2021"\n')
+        rust_source = root / "src/lib.rs"
+        rust_source.write_text("pub fn rust_root() -> i32 { 1 }\npub fn caller() -> i32 { rust_root() }\n")
+        git(root, "add", "a.py", "Cargo.toml", "src/lib.rs")
+        git(root, "commit", "-m", "rust base")
+        rust_source.write_text("pub fn rust_root() -> i32 { 2 }\npub fn caller() -> i32 { rust_root() }\n")
+        code, output = run_case(binary, root, marker=b"rust_root", keys=b"q")
+        assert code == 0 and b"rust_root" in output
+
+        print("PTY: Python and Rust normal, help, resize, partial Ctrl-C, panic, error, and terminal restoration passed")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 pub mod python;
-use crate::analysis::ParsedFile;
+pub mod rust;
+use crate::analysis::{DiscoveredUnit, Discovery, ParsedFile};
 use crate::git::{CapturedFile, CapturedSnapshot, SnapshotRole};
 
 pub trait LanguageAdapter {
@@ -7,21 +8,12 @@ pub trait LanguageAdapter {
     fn accepts_metadata(&self, _path: &[u8]) -> bool {
         false
     }
-    fn module_candidates(&self, snapshot: &CapturedSnapshot, path: &[u8]) -> Vec<String>;
-    fn extract(
-        &self,
-        file: &CapturedFile,
-        role: SnapshotRole,
-        module: Option<String>,
-    ) -> ParsedFile;
+    fn discover(&self, snapshot: &CapturedSnapshot) -> Discovery;
+    fn extract(&self, file: &CapturedFile, role: SnapshotRole, unit: &DiscoveredUnit)
+    -> ParsedFile;
 }
-fn adapters() -> Vec<Box<dyn LanguageAdapter>> {
-    vec![Box::new(python::PythonAdapter)]
-}
-pub fn adapter_for(path: &[u8]) -> Option<Box<dyn LanguageAdapter>> {
-    adapters()
-        .into_iter()
-        .find(|adapter| adapter.accepts_source(path))
+pub(crate) fn adapters() -> Vec<Box<dyn LanguageAdapter>> {
+    vec![Box::new(python::PythonAdapter), Box::new(rust::RustAdapter)]
 }
 /// Source and static metadata paths needed by registered language adapters.
 pub fn capture_path(path: &[u8]) -> bool {
@@ -43,6 +35,8 @@ pub enum UnresolvedReason {
     UnsupportedDispatch,
     DecoratedTarget,
     ParseError,
+    ConditionalCompilation,
+    MacroExpansion,
 }
 #[derive(Debug, Clone)]
 pub enum Resolution<'a> {
@@ -51,11 +45,13 @@ pub enum Resolution<'a> {
 }
 pub struct ResolverRegistry<'a> {
     python: python::resolve::PythonIndex<'a>,
+    rust: rust::resolve::RustIndex<'a>,
 }
 impl<'a> ResolverRegistry<'a> {
     pub fn new(snapshot: &'a crate::analysis::ExtractedSnapshot) -> Self {
         Self {
             python: python::resolve::PythonIndex::new(snapshot),
+            rust: rust::resolve::RustIndex::new(snapshot),
         }
     }
     pub fn resolve(
@@ -65,6 +61,7 @@ impl<'a> ResolverRegistry<'a> {
     ) -> Resolution<'a> {
         match file.language {
             crate::analysis::LanguageId::Python => self.python.resolve(file, call),
+            crate::analysis::LanguageId::Rust => self.rust.resolve(file, call),
         }
     }
 }
