@@ -67,6 +67,8 @@ Supported Python resolution covers direct lexical calls, explicit repository imp
 
 Install a Rust toolchain that supports the 2024 edition, then run:
 
+For source formatting, follow the [Rust code style guidelines](docs/code-style.md) and run `cargo fmt --all` before committing.
+
 ```sh
 cargo run -- local
 cargo run -- local --staged

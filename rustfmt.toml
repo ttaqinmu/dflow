@@ -1,0 +1,4 @@
+# Keep this on stable rustfmt. Spacing between items is covered by
+# docs/code-style.md because rustfmt cannot require those blank lines.
+style_edition = "2024"
+max_width = 100
