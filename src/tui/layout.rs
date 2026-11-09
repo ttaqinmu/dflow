@@ -11,6 +11,7 @@ const ROW_GAP: i32 = 3;
 pub struct Component {
     pub members: Vec<String>,
     pub column: usize,
+    pub cluster: usize,
     pub x: i32,
     pub y: i32,
     pub width: i32,
@@ -82,15 +83,49 @@ pub fn build(impact: &Impact) -> Layout {
             (from != to).then_some((from, to))
         })
         .collect();
+    let mut neighbors = vec![Vec::new(); groups.len()];
+    for &(from, to) in &edges {
+        neighbors[from].push(to);
+        neighbors[to].push(from);
+    }
+    let mut clusters = vec![usize::MAX; groups.len()];
+    let mut cluster_members = Vec::new();
+    for start in 0..groups.len() {
+        if clusters[start] != usize::MAX {
+            continue;
+        }
+        let cluster = cluster_members.len();
+        let mut pending = vec![start];
+        clusters[start] = cluster;
+        let mut members = Vec::new();
+        while let Some(id) = pending.pop() {
+            members.push(id);
+            for &neighbor in &neighbors[id] {
+                if clusters[neighbor] == usize::MAX {
+                    clusters[neighbor] = cluster;
+                    pending.push(neighbor);
+                }
+            }
+        }
+        cluster_members.push(members);
+    }
     let mut levels = vec![None; groups.len()];
     for id in 0..groups.len() {
         level(id, &edges, &mut levels);
     }
-    let max_level = levels.iter().flatten().copied().max().unwrap_or(0);
+    let max_levels: Vec<_> = cluster_members
+        .iter()
+        .map(|members| {
+            members
+                .iter()
+                .map(|id| levels[*id].unwrap())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
     let mut components = Vec::new();
     for (id, members) in groups.into_iter().enumerate() {
-        let distance = levels[id].unwrap_or(0);
-        let column = max_level - distance;
+        let column = max_levels[clusters[id]] - levels[id].unwrap_or(0);
         let cycle = members.len() > 1
             || impact
                 .edges
@@ -98,6 +133,7 @@ pub fn build(impact: &Impact) -> Layout {
                 .any(|(caller, callee)| caller == callee && members.contains(caller));
         components.push(Component {
             members,
+            cluster: clusters[id],
             column,
             x: 0,
             y: 0,
@@ -110,7 +146,7 @@ pub fn build(impact: &Impact) -> Layout {
         });
     }
     let mut visual: Vec<_> = (0..components.len()).collect();
-    visual.sort_by_key(|id| (components[*id].column, *id));
+    visual.sort_by_key(|id| (components[*id].cluster, components[*id].column, *id));
     let order = visual
         .into_iter()
         .flat_map(|id| components[id].members.iter().cloned())
@@ -128,8 +164,12 @@ pub fn place(view: &mut Layout) {
     if view.components.is_empty() {
         return;
     }
-    let columns = view.components.iter().map(|c| c.column).max().unwrap() + 1;
-    let mut widths = vec![MIN_BOX_WIDTH; columns];
+    let clusters = view.components.iter().map(|c| c.cluster).max().unwrap() + 1;
+    let mut widths = vec![Vec::new(); clusters];
+    for component in &view.components {
+        let columns = &mut widths[component.cluster];
+        columns.resize(columns.len().max(component.column + 1), MIN_BOX_WIDTH);
+    }
     for component in &mut view.components {
         component.width = (component
             .extra
@@ -145,19 +185,43 @@ pub fn place(view: &mut Layout) {
         } else {
             component.extra.len() as i32 + 1
         };
-        widths[component.column] = widths[component.column].max(component.width);
+        widths[component.cluster][component.column] =
+            widths[component.cluster][component.column].max(component.width);
     }
-    let mut positions = Vec::with_capacity(columns);
-    let mut x = 0;
-    for width in widths {
-        positions.push(x);
-        x += width + COLUMN_GAP;
-    }
-    let mut rows = vec![0; columns];
+    let positions: Vec<Vec<i32>> = widths
+        .into_iter()
+        .map(|cluster_widths| {
+            let mut x = 0;
+            cluster_widths
+                .into_iter()
+                .map(|width| {
+                    let at = x;
+                    x += width + COLUMN_GAP;
+                    at
+                })
+                .collect()
+        })
+        .collect();
+    let mut rows: Vec<Vec<i32>> = positions
+        .iter()
+        .map(|columns| vec![0; columns.len()])
+        .collect();
     for component in &mut view.components {
-        component.x = positions[component.column];
-        component.y = rows[component.column];
-        rows[component.column] += component.height + ROW_GAP;
+        component.x = positions[component.cluster][component.column];
+        component.y = rows[component.cluster][component.column];
+        rows[component.cluster][component.column] += component.height + ROW_GAP;
+    }
+    let mut origin_y = 0;
+    let origins: Vec<_> = rows
+        .into_iter()
+        .map(|columns| {
+            let at = origin_y;
+            origin_y += columns.into_iter().max().unwrap_or(0);
+            at
+        })
+        .collect();
+    for component in &mut view.components {
+        component.y += origins[component.cluster];
     }
     view.width = view
         .components

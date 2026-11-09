@@ -1,11 +1,11 @@
-use super::state::{App, Focus, kind, role, safe_text};
+use super::state::{App, kind, role_name, safe_text};
 use crate::analysis::SymbolChangeKind;
 use crate::cli::CompareMode;
 use crate::git::CapturedSnapshot;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Text};
+use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use std::collections::BTreeMap;
 
@@ -48,20 +48,13 @@ fn snapshot_label(snapshot: &CapturedSnapshot) -> String {
         .unwrap_or_else(|| snapshot.content_id.clone());
     format!(
         "{} {:?} {}",
-        role(snapshot.role),
+        role_name(snapshot.role),
         snapshot.kind,
         truncate(&identity, 8)
     )
 }
-fn panel<'a>(title: &'a str, focused: bool) -> Block<'a> {
-    Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        })
+fn panel(title: &str) -> Block<'_> {
+    Block::default().title(title).borders(Borders::ALL)
 }
 fn change_style(change: SymbolChangeKind) -> Style {
     Style::default().fg(match change {
@@ -187,11 +180,23 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
             .selected_node
             .as_ref()
             .is_some_and(|id| component.members.contains(id));
-        let base_style = app
-            .root()
-            .filter(|root| component.members.contains(&root.id))
-            .map(|root| change_style(root.kind))
-            .unwrap_or(normal);
+        let kinds: std::collections::BTreeSet<_> = component
+            .members
+            .iter()
+            .flat_map(|id| app.nodes[id].changes.iter().map(|change| kind(*change)))
+            .collect();
+        let base_style = if kinds.len() > 1 {
+            Style::default().fg(Color::Magenta)
+        } else {
+            component
+                .members
+                .iter()
+                .flat_map(|id| &app.nodes[id].changes)
+                .next()
+                .copied()
+                .map(change_style)
+                .unwrap_or(normal)
+        };
         let style = if selected {
             base_style.add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
@@ -294,18 +299,18 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
         }
     }
 }
+pub const HEADER_HEIGHT: u16 = 5;
 pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
     let area = frame.area();
     if app.help {
         let help = [
             "DFlow keyboard help",
             "",
-            "Tab: switch Changes / Graph",
-            "d: expand/collapse selected node details",
-            "Arrows / j,k: select root or graph node",
+            "Arrows / j,k: select graph node",
             "Shift+arrows: pan graph (including wide nodes)",
-            "Page Up/Down: select change or pan graph",
+            "Page Up/Down: pan vertically",
             "+/-: caller depth",
+            "d: expand/collapse selected node details",
             "?: toggle help",
             "q / Ctrl-C: quit",
             "",
@@ -313,25 +318,20 @@ pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
         ];
         frame.render_widget(
             Paragraph::new(help.join("\n"))
-                .block(panel("Help", true))
+                .block(panel("Help"))
                 .wrap(Wrap { trim: false }),
             area,
         );
         return;
     }
-    if area.width < 100 || area.height < 16 {
-        frame.render_widget(Paragraph::new("Terminal too small for graph. Resize to at least 100x16. Press q to quit or ? for help.").block(panel("DFlow", true)).wrap(Wrap { trim: false }), area);
+    if area.width < 60 || area.height < 12 {
+        frame.render_widget(Paragraph::new("Terminal too small for graph. Resize to at least 60x12. Press q to quit or ? for help.").block(panel("DFlow")).wrap(Wrap { trim: false }), area);
         return;
     }
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(4),
-            Constraint::Min(5),
-            Constraint::Length(2),
-        ])
+        .constraints([Constraint::Length(HEADER_HEIGHT), Constraint::Min(5)])
         .split(area);
-    let snapshot = app.root().map(|r| role(r.role)).unwrap_or("target");
     let status = if app.session.complete() {
         "complete"
     } else {
@@ -344,59 +344,20 @@ pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "{} | focused: {} | depth: {} | {}\n{}",
-            mode_label(app.mode),
-            snapshot,
-            app.depth,
-            status,
-            identity
-        ))
-        .block(panel("DFlow", false)),
-        vertical[0],
-    );
-    let horizontal = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(25), Constraint::Min(25)])
-        .split(vertical[1]);
-    let list_height = horizontal[0].height.saturating_sub(2) as usize;
-    let from = app.root_index.saturating_sub(list_height.saturating_sub(1));
-    let mut entries = Vec::new();
-    for (index, root) in app.roots.iter().enumerate().skip(from).take(list_height) {
-        entries.push(Line::styled(
-            format!(
-                "{} [{}] {} {}",
-                if index == app.root_index { ">" } else { " " },
-                kind(root.kind),
-                role(root.role),
-                truncate(&app.name_for_root(root), 12)
-            ),
-            change_style(root.kind),
-        ));
-    }
-    if entries.is_empty() {
-        entries.push(Line::from("No changed symbols"));
-    }
-    frame.render_widget(
-        Paragraph::new(Text::from(entries)).block(panel("Changes", app.focus == Focus::Changes)),
-        horizontal[0],
-    );
-    let block = panel("Graph: caller -> callee", app.focus == Focus::Graph);
-    let inner = block.inner(horizontal[1]);
-    frame.render_widget(block, horizontal[1]);
+            "{} | depth: {} | {} | {} changed | {} nodes\n{}\nArrows/j/k select  Shift+arrows/Page Up/Down pan  +/- depth  d expand  ? help  q quit",
+            mode_label(app.mode), app.depth, status, app.changed_roots.len(), app.layout.order.len(), identity
+        )).block(panel("DFlow")), vertical[0]);
+    let block = panel("Graph: caller -> callee");
+    let inner = block.inner(vertical[1]);
+    frame.render_widget(block, vertical[1]);
     if app.layout.components.is_empty() {
-        let mut message = vec!["No impact graph to display".to_owned()];
+        let mut message = vec!["No changed symbols".to_owned()];
         message.extend(app.diagnostic_lines());
         frame.render_widget(
-            Paragraph::new(message.join("\n")).wrap(Wrap { trim: false }),
+            Paragraph::new(Text::from(message.join("\n"))).wrap(Wrap { trim: false }),
             inner,
         );
     } else {
         draw_graph(app, frame.buffer_mut(), inner);
     }
-    frame.render_widget(
-        Paragraph::new(
-            "Tab panels  arrows/j/k select  Shift+arrows pan  +/- depth  d expand  ? help  q quit",
-        ),
-        vertical[2],
-    );
 }

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Exercise the debug DFlow binary in a real Linux pseudoterminal."""
 
+import codecs
 import fcntl
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import signal
 import struct
@@ -19,6 +21,100 @@ def git(root: Path, *args: str) -> None:
     subprocess.run(
         ["git", *args], cwd=root, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
+
+
+class Screen:
+    """Track the cells drawn by the TUI, rather than matching stale redraws."""
+
+    def __init__(self, width: int = 120, height: int = 30) -> None:
+        self.width, self.height = width, height
+        self.cells = [[" "] * width for _ in range(height)]
+        self.x = self.y = 0
+        self.decoder = codecs.getincrementaldecoder("utf-8")()
+        self.escape = ""
+
+    def resize(self, width: int, height: int) -> None:
+        self.cells = [(row[:width] + [" "] * max(0, width - len(row))) for row in self.cells[:height]]
+        self.cells.extend([[" "] * width for _ in range(height - len(self.cells))])
+        self.width, self.height = width, height
+        self.x = min(self.x, width - 1)
+        self.y = min(self.y, height - 1)
+
+    def feed(self, data: bytes) -> None:
+        for char in self.decoder.decode(data):
+            if self.escape:
+                self.escape += char
+                if self.escape == "\x1b[":
+                    continue
+                if self.escape.startswith("\x1b["):
+                    if "@" <= char <= "~":
+                        self.csi(self.escape[2:-1], char)
+                        self.escape = ""
+                    continue
+                if self.escape == "\x1b]":
+                    continue
+                if self.escape.startswith("\x1b]"):
+                    if char == "\x07" or self.escape.endswith("\x1b\\"):
+                        self.escape = ""
+                    continue
+                self.escape = ""
+            elif char == "\x1b":
+                self.escape = char
+            elif char == "\r":
+                self.x = 0
+            elif char == "\n":
+                self.y = min(self.y + 1, self.height - 1)
+            elif char == "\b":
+                self.x = max(0, self.x - 1)
+            elif char >= " " and self.x < self.width and self.y < self.height:
+                self.cells[self.y][self.x] = char
+                self.x += 1
+
+    def csi(self, params: str, command: str) -> None:
+        numbers = [int(part) if part.isdecimal() else 0 for part in params.split(";")]
+        first = numbers[0] if numbers else 0
+        if command in "Hf":
+            self.y = min(max(first - 1, 0), self.height - 1)
+            self.x = min(max((numbers[1] if len(numbers) > 1 else 1) - 1, 0), self.width - 1)
+        elif command == "G":
+            self.x = min(max(first - 1, 0), self.width - 1)
+        elif command == "A":
+            self.y = max(0, self.y - (first or 1))
+        elif command == "B":
+            self.y = min(self.height - 1, self.y + (first or 1))
+        elif command == "C":
+            self.x = min(self.width - 1, self.x + (first or 1))
+        elif command == "D":
+            self.x = max(0, self.x - (first or 1))
+        elif command == "J" and first in (0, 2):
+            self.cells = [[" "] * self.width for _ in range(self.height)]
+        elif command == "K":
+            self.cells[self.y][self.x:] = [" "] * (self.width - self.x)
+
+    def rows(self) -> list[str]:
+        return ["".join(row) for row in self.cells]
+
+
+def canvas(screen: Screen) -> str:
+    rows = screen.rows()
+    assert rows[0].startswith("┌DFlow"), "DFlow information header was not drawn"
+    assert rows[5].startswith("┌Graph: caller -> callee"), "graph was not drawn below the header"
+    assert rows[5][-1] == "┐" and rows[-1][0] == "└" and rows[-1][-1] == "┘", "graph border did not fill terminal width and height"
+    image = "\n".join(rows)
+    assert "Changes" not in image, "obsolete Changes panel appeared"
+    return image
+
+
+def input_and_redraw(master: int, process: subprocess.Popen[bytes], screen: Screen, key: bytes, marker: bytes | None) -> bytes:
+    os.write(master, key)
+    output = collect(master, process, marker, 0.3 if marker is None else 5)
+    assert output and (marker is None or marker in output), f"{key!r} did not redraw {marker!r}"
+    if marker is not None:
+        output += collect(master, process, None, 0.2)
+    screen.feed(output)
+    return output
+
+
 
 
 def collect(master: int, process: subprocess.Popen[bytes], marker: bytes | None, seconds: float = 5) -> bytes:
@@ -41,7 +137,7 @@ def collect(master: int, process: subprocess.Popen[bytes], marker: bytes | None,
     return bytes(output)
 
 
-def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"", fault: str | None = None, resize: bool = False, help_key: bool = False, expand_node: bool = False, node_title: bytes | None = None) -> tuple[int, bytes]:
+def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"", fault: str | None = None, resize: bool = False, help_key: bool = False, expand_node: bool = False, node_title: bytes | None = None, canvas_titles: tuple[str, str] | None = None) -> tuple[int, bytes]:
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
     before = termios.tcgetattr(slave)
@@ -64,24 +160,56 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
             raise AssertionError(f"TUI marker {marker!r} did not appear")
         if marker is not None:
             output += collect(master, process, None, 0.2)
+        screen = Screen()
+        screen.feed(output)
+        if canvas_titles is not None:
+            image = canvas(screen)
+            for title in canvas_titles:
+                assert title in image, f"unrelated changed root {title!r} was not visible on initial screen"
+            assert "complete" in image
+            assert "base " in image and "target " in image, "both snapshot identities were not shown"
         if expand_node:
             assert b"Details" not in output, "separate Details panel appeared initially"
             assert node_title is not None and node_title in output, "node title was not visible"
             assert b"Location:" in output, "collapsed node location was not visible"
-            os.write(master, b"d")
-            expanded_output = collect(master, process, b"Source:")
-            assert b"Source:" in expanded_output, "d did not expand source inside the selected node"
+            expanded_output = input_and_redraw(master, process, screen, b"d", b"Source [target]:")
             assert b"Details" not in expanded_output, "separate Details panel appeared after d"
             output += expanded_output
+        if canvas_titles is not None:
+            assert "Source [target]:" in canvas(screen), "d did not expand selected-node source in the graph"
+            before_pan = screen.rows()[6:-1]
+            output += input_and_redraw(master, process, screen, b"\x1b[1;2C", None)
+            assert screen.rows()[6:-1] != before_pan, "Shift+Right did not pan the expanded wide node"
+            output += input_and_redraw(master, process, screen, b"\x1b[6~", None)
+            output += input_and_redraw(master, process, screen, b"d", None)
+            image = canvas(screen)
+            for title in canvas_titles:
+                assert title in image, f"changed root {title!r} disappeared after collapse"
+            depth = int(re.search(r"depth: (\d+)", image).group(1))
+            output += input_and_redraw(master, process, screen, b"+", None)
+            assert f"depth: {depth + 1}" in canvas(screen), "depth increase did not update header"
+            output += input_and_redraw(master, process, screen, b"-", None)
+            image = canvas(screen)
+            for title in canvas_titles:
+                assert title in image, f"changed root {title!r} disappeared after depth refresh"
         if resize:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 100, 0, 0))
+            screen.resize(100, 20)
             os.kill(process.pid, signal.SIGWINCH)
-            output += collect(master, process, None, 0.2)
+            resized_output = collect(master, process, None, 0.3)
+            assert resized_output, "resize did not redraw graph"
+            resized_output += collect(master, process, None, 0.2)
+            screen.feed(resized_output)
+            if canvas_titles is not None:
+                canvas(screen)
+            output += resized_output
         if help_key:
-            os.write(master, b"?")
-            help_output = collect(master, process, b"Help")
-            assert b"Help" in help_output, "help key did not open help"
+            help_output = input_and_redraw(master, process, screen, b"?", None)
+            assert "DFlow keyboard help" in "\n".join(screen.rows()), "help key did not open help"
             output += help_output
+            if canvas_titles is not None:
+                output += input_and_redraw(master, process, screen, b"?", None)
+                canvas(screen)
         if keys:
             os.write(master, keys)
         process.wait(timeout=5)
@@ -106,15 +234,18 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         source = root / "a.py"
-        source.write_text("def f(): return 1\n")
+        other_source = root / "b.py"
+        source.write_text("def f(): return 1\ndef from_a(): return f()\n")
+        other_source.write_text("def other(): return 1\ndef from_b(): return other()\n")
         git(root, "init")
         git(root, "config", "user.name", "Fixture")
         git(root, "config", "user.email", "fixture@example.com")
         git(root, "add", ".")
         git(root, "commit", "-m", "base")
-        source.write_text("def f(): return 2\n")
+        source.write_text("def f(): return 2  # " + "wide-node-evidence-" * 9 + "\ndef from_a(): return f()\n")
+        other_source.write_text("def other(): return 2\ndef from_b(): return other()\n")
 
-        code, output = run_case(binary, root, marker=b"Graph", keys=b"q", resize=True, help_key=True, expand_node=True, node_title=b"a.py:f")
+        code, output = run_case(binary, root, marker=b"Graph:", keys=b"q", resize=True, help_key=True, expand_node=True, node_title=b"a.py:f", canvas_titles=("a.py:f", "b.py:other"))
         assert code == 0 and b"complete" in output
         assert "─".encode() in output, "normal graph did not draw box lines"
         assert b"\x1b[38;5;3;49m" in output, "modified change did not receive yellow terminal styling"
@@ -122,7 +253,7 @@ def main() -> None:
         source.write_text("def f(:\n")
         code, output = run_case(binary, root, marker=b"PARTIAL", keys=b"\x03")
         assert code == 1 and b"PARTIAL" in output
-        source.write_text("def f(): return 2\n")
+        source.write_text("def f(): return 2\ndef from_a(): return f()\n")
 
         code, output = run_case(binary, root, marker=None, fault="panic")
         assert code != 0 and b"injected terminal panic" in output
@@ -136,13 +267,13 @@ def main() -> None:
         (root / "Cargo.toml").write_text('[package]\nname = "pty-rust"\nversion = "0.1.0"\nedition = "2021"\n')
         rust_source = root / "src/lib.rs"
         rust_source.write_text("pub fn rust_root() -> i32 { 1 }\npub fn caller() -> i32 { rust_root() }\n")
-        git(root, "add", "a.py", "Cargo.toml", "src/lib.rs")
+        git(root, "add", "a.py", "b.py", "Cargo.toml", "src/lib.rs")
         git(root, "commit", "-m", "rust base")
         rust_source.write_text("pub fn rust_root() -> i32 { 2 }\npub fn caller() -> i32 { rust_root() }\n")
         code, output = run_case(binary, root, marker=b"Graph", keys=b"q", expand_node=True, node_title=b"lib.rs:rust_root")
         assert code == 0 and b"rust_root" in output
 
-        print("PTY: Python and Rust inline node expansion, help, resize, partial Ctrl-C, panic, error, and terminal restoration passed")
+        print("PTY: simultaneous disconnected Python roots, graph expansion, depth, pan, help, full-width resize, Rust expansion, partial Ctrl-C, panic, error, and terminal restoration passed")
 
 
 if __name__ == "__main__":

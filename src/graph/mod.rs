@@ -27,6 +27,7 @@ pub struct SnapshotGraph {
     pub graph: StableDiGraph<GraphNode, Vec<String>>,
     pub ids: BTreeMap<String, NodeIndex>,
     pub symbol_ids: BTreeMap<(SourceUnitKey, usize), String>,
+    pub module_ids: BTreeMap<SourceUnitKey, String>,
     pub calls: Vec<CallRecord>,
 }
 #[derive(Debug)]
@@ -146,6 +147,7 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
         graph,
         ids,
         symbol_ids,
+        module_ids,
         calls,
     }
 }

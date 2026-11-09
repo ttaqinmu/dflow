@@ -84,20 +84,19 @@ If both stdin and stdout are terminals, the default output is an interactive gra
 
 ### Terminal controls
 
-The left Changes panel selects changed functions; the Graph panel fills the remaining width. Each symbol box is titled `file_name:function_name` (module boxes use the module filename), always shows its basic location, and sizes to its content rather than truncating it. Press `d` to expand or collapse details inside the selected graph node, including source and call-site evidence where available; there is no separate Details panel. Expanded boxes can be wider than the viewport, so pan to see their full contents. Shared routes meet at junctions; panning clips the graph without breaking visible joins. Deleted roots and their callers use the **base** snapshot; added and modified roots use **target**. The header shows the comparison and snapshot identities. A partial analysis is visibly marked.
+The terminal has two persistent areas: a DFlow information header showing both snapshot identities, caller depth, analysis completeness, counts, and shortcuts, above one full-width graph canvas. All changed symbols appear together, with unrelated caller graphs as separate islands and shared callers shown once. Each symbol box is titled `file_name:function_name` (module boxes use the module filename), always shows its basic location, and sizes to its content rather than truncating it. Press `d` to expand or collapse details inside the selected graph node, including snapshot-labeled source and call-site evidence where available; there is no separate Details panel. Expanded boxes can be wider than the viewport, so pan to see their full contents. Shared routes meet at junctions; panning clips the graph without breaking visible joins. Deleted roots and their callers use the **base** snapshot; added and modified roots use **target**. A partial analysis is visibly marked.
 
 | Key | Action |
 | --- | --- |
-| Tab | Switch focus between Changes and Graph |
+| Arrow keys or `j`/`k` | Select a graph node |
 | `d` | Expand or collapse details in the selected graph node (collapsed by default) |
-| Arrow keys or `j`/`k` | Select a change or graph node |
-| Shift+arrow keys | Pan the graph to view wide nodes |
-| Page Up / Page Down | Scroll the focused panel |
+| Shift+arrow keys | Pan the graph, including wide nodes |
+| Page Up / Page Down | Pan the graph vertically |
 | `+` / `-` | Increase or decrease caller depth |
 | `?` | Show or close help |
 | `q` or Ctrl-C | Quit |
 
-The terminal needs at least 100 columns and 16 rows. Narrower terminals show resize guidance. Renderer-owned box-drawing lines and arrows are single-cell Unicode glyphs. Added changes are green, deleted changes red, and modified changes yellow in the change list and root boxes; unchanged callers and connectors retain the terminal default color. Focus and selection remain highlighted.
+The terminal needs at least 60 columns and 12 rows. Narrower terminals show resize guidance. Renderer-owned box-drawing lines and arrows are single-cell Unicode glyphs. Added roots are green, deleted roots red, and modified roots yellow; roots with multiple change kinds have a distinct mixed style. Unchanged callers and connectors retain the terminal default color. Selection remains highlighted.
 
 Run the current test suite with:
 

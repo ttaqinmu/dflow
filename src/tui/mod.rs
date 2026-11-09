@@ -80,8 +80,8 @@ pub fn run(session: &AnalysisSession, mode: &CompareMode, depth: usize) -> io::R
             let viewport = Rect::new(
                 0,
                 0,
-                size.width.saturating_sub(27),
-                size.height.saturating_sub(8),
+                size.width.saturating_sub(2),
+                size.height.saturating_sub(render::HEADER_HEIGHT + 2),
             );
             app.clamp(viewport);
             terminal.draw(|frame| render::render(&app, frame))?;
@@ -174,8 +174,8 @@ mod tests {
         component: &layout::Component,
         row: i32,
     ) -> String {
-        let x = (26 + component.x - app.pan_x) as usize;
-        let y = (5 + component.y - app.pan_y + row) as usize;
+        let x = (1 + component.x - app.pan_x) as usize;
+        let y = (6 + component.y - app.pan_y + row) as usize;
         text.lines()
             .nth(y)
             .unwrap()
@@ -193,6 +193,51 @@ mod tests {
             .find(|component| component.members.iter().any(|id| id == selected))
             .unwrap()
     }
+    fn select_title(app: &mut state::App<'_>, title: &str) {
+        let id = app
+            .layout
+            .components
+            .iter()
+            .find(|component| component.title == title)
+            .unwrap_or_else(|| panic!("missing graph node {title}"))
+            .members[0]
+            .clone();
+        let destination = app
+            .layout
+            .order
+            .iter()
+            .position(|member| member == &id)
+            .unwrap();
+        while app
+            .layout
+            .order
+            .iter()
+            .position(|member| Some(member) == app.selected_node.as_ref())
+            .unwrap()
+            < destination
+        {
+            app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+        }
+        while app
+            .layout
+            .order
+            .iter()
+            .position(|member| Some(member) == app.selected_node.as_ref())
+            .unwrap()
+            > destination
+        {
+            app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        }
+        assert_eq!(app.selected_node.as_ref(), Some(&id));
+    }
+    fn graph_char(text: &str, x: i32, y: i32) -> char {
+        text.lines()
+            .nth((6 + y) as usize)
+            .unwrap()
+            .chars()
+            .nth((1 + x) as usize)
+            .unwrap()
+    }
 
     #[test]
     fn graph_renders_arrow_labels_evidence_and_cycle_members() {
@@ -205,7 +250,7 @@ mod tests {
         let app = state::App::new(&fixture, &mode, 1);
         let text = screen(&app, 120, 30);
         assert!(text.contains("Graph: caller -> callee"));
-        assert!(!text.contains("Call evidence:"));
+        assert!(!text.contains("Call evidence ["));
         assert!(!text.contains("Details"));
         let selected = app.selected_node.as_ref().unwrap();
         let root = app
@@ -216,20 +261,15 @@ mod tests {
             .unwrap();
         assert_eq!(node_line(&app, &text, root, 1), root.title);
         assert_eq!(node_line(&app, &text, root, 3), root.description);
+        assert!(root.description.starts_with("Location: a.py:"));
         assert!(root.width >= root.title.chars().count() as i32 + 2);
         assert_eq!(root.height, 5);
-        assert!(
-            text.lines().skip(5).take(23).any(|line| line
-                .chars()
-                .skip(26)
-                .take(63)
-                .any(|ch| ch == '→'))
-        );
+        assert!(text.lines().skip(6).any(|line| line.contains('→')));
         let mut app = app;
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let text = screen(&app, 120, 30);
-        assert!(text.contains("Source:"));
-        assert!(text.contains("Call evidence:"));
+        assert!(text.contains("Source [target]:"));
+        assert!(text.contains("Call evidence [target]:"));
         let target = [(
             b"a.py".as_slice(),
             b"def a(): b()\ndef b(): a()\n".as_slice(),
@@ -257,7 +297,7 @@ mod tests {
             cycle.description
         );
         cycle_app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-        assert!(screen(&cycle_app, 120, 30).contains("Cycle members:"));
+        assert!(screen(&cycle_app, 120, 30).contains("Cycle members (combined view):"));
     }
     #[test]
     fn module_caller_box_shows_its_name_without_type_prefix() {
@@ -267,48 +307,51 @@ mod tests {
         let mut app = state::App::new(&fixture, &mode, 1);
         app.pan_x = 0;
         app.pan_y = 0;
-        let graph = app.graph().unwrap();
         let module = app
             .layout
             .components
             .iter()
-            .find(|component| {
-                graph.graph[graph.ids[&component.members[0]]]
-                    .symbol
-                    .is_none()
-            })
+            .find(|component| component.title == "a.py")
             .unwrap();
         assert_eq!(node_line(&app, &screen(&app, 120, 30), module, 1), "a.py");
     }
 
     #[test]
-    fn reducer_changes_depth_focus_selection_and_exits() {
+    fn reducer_changes_depth_selection_and_exits() {
+        let base = [(
+            b"a.py".as_slice(),
+            b"def f(): return 1\ndef g(): return f()\n".as_slice(),
+        )];
         let target = [(
             b"a.py".as_slice(),
-            b"def f(): pass\ndef g(): f()\n".as_slice(),
+            b"def f(): return 2\ndef g(): return f()\n".as_slice(),
         )];
-        let session = session(&[], &target);
+        let session = session(&base, &target);
         let mode = mode();
         let mut app = state::App::new(&session, &mode, 0);
+        assert_eq!(app.changed_roots.len(), 1);
         assert_eq!(app.layout.order.len(), 1);
+        let root = app.selected_node.clone();
         app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
         assert_eq!(app.depth, 1);
         assert_eq!(app.layout.order.len(), 2);
-        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert!(matches!(app.focus, state::Focus::Graph));
-        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert!(matches!(app.focus, state::Focus::Changes));
-        app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        assert!(app.selected_node.is_some());
+        assert_eq!(app.selected_node, root);
+        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        assert_ne!(app.selected_node, root);
         app.handle_key(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE));
         assert_eq!(app.depth, 0);
+        assert_eq!(app.selected_node, root);
+        assert_eq!(app.layout.order.len(), 1);
+        let before = app.selected_node.clone();
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.selected_node, before);
         app.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
         assert!(screen(&app, 120, 30).contains("DFlow keyboard help"));
         assert!(!app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
         assert!(app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
     }
     #[test]
-    fn expanding_selected_node_grows_box_without_overlap_and_tab_has_two_stops() {
+    fn expanding_selected_node_grows_box_without_overlap() {
         let target = [(
             b"a.py".as_slice(),
             b"def f(): pass\ndef g(): f()\n".as_slice(),
@@ -320,20 +363,23 @@ mod tests {
         let original = selected_component(&app, &selected);
         let (original_width, original_height) = (original.width, original.height);
         let hidden = screen(&app, 180, 40);
-        assert!(!hidden.contains("Source:"));
+        assert!(!hidden.contains("Source ["));
         assert_eq!(original_height, 5);
         assert!(original_width >= 26);
         assert_eq!(node_line(&app, &hidden, original, 3), original.description);
         assert_eq!(hidden.lines().nth(6).unwrap().chars().nth(179), Some('│'));
 
-        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert!(matches!(app.focus, state::Focus::Graph));
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let expanded = selected_component(&app, &selected);
         assert!(expanded.height > original_height);
-        assert!(expanded.extra.iter().any(|line| line.contains("Source:")));
+        assert!(
+            expanded
+                .extra
+                .iter()
+                .any(|line| line.contains("Source [target]:"))
+        );
         let shown = screen(&app, 180, 40);
-        assert!(shown.contains("Source:"));
+        assert!(shown.contains("Source [target]:"));
         assert!(shown.contains("Path:"));
         assert_eq!(node_line(&app, &shown, expanded, 1), expanded.title);
         for other in app
@@ -351,14 +397,12 @@ mod tests {
             );
         }
         app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert!(matches!(app.focus, state::Focus::Changes));
-        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        assert!(matches!(app.focus, state::Focus::Graph));
+        assert_eq!(app.selected_node.as_ref(), Some(&selected));
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         assert_eq!(selected_component(&app, &selected).height, original_height);
         assert!(selected_component(&app, &selected).extra.is_empty());
         assert_eq!(app.selected_node.as_ref(), Some(&selected));
-        assert!(!screen(&app, 180, 40).contains("Source:"));
+        assert!(!screen(&app, 180, 40).contains("Source ["));
     }
 
     #[test]
@@ -367,7 +411,7 @@ mod tests {
         let empty = session(&[], &[]);
         let app = state::App::new(&empty, &mode, 1);
         assert!(screen(&app, 120, 30).contains("No changed symbols"));
-        assert!(screen(&app, 70, 12).contains("Terminal too small"));
+        assert!(screen(&app, 50, 10).contains("Terminal too small"));
         let bad = session(&[], &[(b"bad.py", b"def f(:\n")]);
         let mut app = state::App::new(&bad, &mode, 1);
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
@@ -385,14 +429,7 @@ mod tests {
         let fixture = session(&base, &target);
         let mode = mode();
         let mut app = state::App::new(&fixture, &mode, 1);
-        let deleted = app
-            .roots
-            .iter()
-            .position(|root| root.kind == crate::analysis::SymbolChangeKind::Deleted)
-            .unwrap();
-        for _ in 0..deleted {
-            app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        }
+        select_title(&mut app, "a.py:removed");
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let selected = app.selected_node.as_ref().unwrap();
         let root = app
@@ -406,13 +443,14 @@ mod tests {
             "a.py:removed"
         );
         let text = screen(&app, 120, 30);
-        assert!(text.contains("[deleted] base"));
+        assert!(text.contains("Source [base]:"));
         assert!(text.contains("Change: deleted"));
+        assert!(text.contains("Call evidence [base]:"));
         assert!(text.contains("called by"));
-        assert_eq!(app.layout.order.len(), 2);
+        assert!(app.layout.order.len() >= 2);
     }
     #[test]
-    fn diff_colors_follow_kind_across_list_and_graph() {
+    fn all_change_kinds_use_individual_graph_colors_and_snapshot_evidence() {
         let base = [(
             b"a.py".as_slice(),
             b"def gone(): pass\ndef changed(): return 1\n".as_slice(),
@@ -423,61 +461,50 @@ mod tests {
         )];
         let fixture = session(&base, &target);
         let mode = mode();
-        for (kind, color) in [
-            (SymbolChangeKind::Added, Color::Green),
-            (SymbolChangeKind::Modified, Color::Yellow),
-            (SymbolChangeKind::Deleted, Color::Red),
+        let mut app = state::App::new(&fixture, &mode, 1);
+        assert!(screen(&app, 180, 50).contains("base WorkingTree"));
+        assert!(screen(&app, 180, 50).contains("target WorkingTree"));
+        assert!(!screen(&app, 180, 50).contains("Changes"));
+        assert!(!screen(&app, 180, 50).contains("focused:"));
+        for (title, kind, color) in [
+            ("a.py:fresh", SymbolChangeKind::Added, Color::Green),
+            ("a.py:changed", SymbolChangeKind::Modified, Color::Yellow),
+            ("a.py:gone", SymbolChangeKind::Deleted, Color::Red),
         ] {
-            let mut app = state::App::new(&fixture, &mode, 1);
-            let index = app
-                .roots
-                .iter()
-                .position(|root| {
-                    root.kind == kind
-                        && (kind != SymbolChangeKind::Added || app.name_for_root(root) == "fresh")
-                })
-                .unwrap();
-            for _ in 0..index {
-                app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-            }
-            app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-            let root = app.root().unwrap();
-            assert_eq!(root.kind, kind);
+            select_title(&mut app, title);
+            app.pan_x = 0;
+            app.pan_y = 0;
             let component = app
                 .layout
                 .components
                 .iter()
-                .find(|component| component.members.contains(&root.id))
+                .find(|c| c.title == title)
                 .unwrap();
-            let graph_x = (26 + component.x - app.pan_x) as u16;
-            let graph_y = (5 + component.y - app.pan_y) as u16;
-            let mut terminal = Terminal::new(TestBackend::new(180, 30)).unwrap();
+            assert!(app.nodes[&component.members[0]].changes.contains(&kind));
+            let mut terminal = Terminal::new(TestBackend::new(180, 50)).unwrap();
             terminal.draw(|frame| render::render(&app, frame)).unwrap();
-            let buffer = terminal.backend().buffer();
-            for (row, entry) in app.roots.iter().enumerate() {
-                let expected = match entry.kind {
-                    SymbolChangeKind::Added => Color::Green,
-                    SymbolChangeKind::Deleted => Color::Red,
-                    SymbolChangeKind::Modified => Color::Yellow,
-                };
-                assert_eq!(buffer[(2, 5 + row as u16)].fg, expected);
-            }
-            let box_cell = &buffer[(graph_x, graph_y)];
+            let box_cell =
+                &terminal.backend().buffer()[((1 + component.x) as u16, (6 + component.y) as u16)];
             assert_eq!(box_cell.symbol(), "┌");
             assert_eq!(box_cell.fg, color);
             assert!(box_cell.modifier.contains(Modifier::REVERSED));
-            for caller in app
-                .layout
-                .components
-                .iter()
-                .filter(|component| !component.members.contains(&root.id))
-            {
-                let x = (26 + caller.x - app.pan_x) as u16;
-                let y = (5 + caller.y - app.pan_y) as u16;
-                if x < 149 && y < 28 {
-                    assert_eq!(buffer[(x, y)].fg, Color::Reset);
-                }
+            app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+            let details = selected_component(&app, app.selected_node.as_ref().unwrap())
+                .extra
+                .join("\n");
+            assert!(details.contains(&format!("Change: {}", state::kind(kind))));
+            if kind == SymbolChangeKind::Modified {
+                assert!(details.contains("Source [base]:"));
+                assert!(details.contains("Source [target]:"));
+            } else {
+                let snapshot = if kind == SymbolChangeKind::Deleted {
+                    "base"
+                } else {
+                    "target"
+                };
+                assert!(details.contains(&format!("Source [{snapshot}]:")));
             }
+            app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         }
     }
 
@@ -494,10 +521,9 @@ mod tests {
         for _ in 0..2 {
             terminal.draw(|frame| render::render(&app, frame)).unwrap();
             let component = selected_component(&app, app.selected_node.as_ref().unwrap());
-            let title_y = (6 + component.y - app.pan_y) as u16;
-            let padding_start =
-                (27 + component.x - app.pan_x) as u16 + component.title.len() as u16;
-            let right = (26 + component.x + component.width - 1 - app.pan_x) as u16;
+            let title_y = (7 + component.y - app.pan_y) as u16;
+            let padding_start = (2 + component.x - app.pan_x) as u16 + component.title.len() as u16;
+            let right = (1 + component.x + component.width - 1 - app.pan_x) as u16;
             assert!(padding_start < right);
             for x in padding_start..right {
                 let cell = &terminal.backend().buffer()[(x, title_y)];
@@ -507,8 +533,7 @@ mod tests {
             }
             app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         }
-        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        select_title(&mut app, "a.py:g");
         terminal.draw(|frame| render::render(&app, frame)).unwrap();
         let former = app
             .layout
@@ -516,15 +541,15 @@ mod tests {
             .iter()
             .find(|component| component.title == "a.py:f")
             .unwrap();
-        let x = (27 + former.x - app.pan_x) as u16 + former.title.len() as u16;
-        let y = (6 + former.y - app.pan_y) as u16;
+        let x = (2 + former.x - app.pan_x) as u16 + former.title.len() as u16;
+        let y = (7 + former.y - app.pan_y) as u16;
         let cell = &terminal.backend().buffer()[(x, y)];
         assert_eq!(cell.symbol(), " ");
         assert_eq!(cell.fg, Color::Green);
         assert!(!cell.modifier.contains(Modifier::REVERSED));
         let selected = selected_component(&app, app.selected_node.as_ref().unwrap());
-        let x = (27 + selected.x - app.pan_x) as u16 + selected.title.len() as u16;
-        let y = (6 + selected.y - app.pan_y) as u16;
+        let x = (2 + selected.x - app.pan_x) as u16 + selected.title.len() as u16;
+        let y = (7 + selected.y - app.pan_y) as u16;
         assert!(
             terminal.backend().buffer()[(x, y)]
                 .modifier
@@ -542,14 +567,7 @@ mod tests {
         let fixture = session(&[], &target);
         let mode = mode();
         let mut app = state::App::new(&fixture, &mode, 2);
-        let root_index = app
-            .roots
-            .iter()
-            .position(|root| app.name_for_root(root) == "root")
-            .unwrap();
-        for _ in 0..root_index {
-            app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        }
+        select_title(&mut app, "a.py:root");
         assert_eq!(app.layout.components.len(), 4);
         assert_eq!(app.layout.edges.len(), 4);
         assert_eq!(app.layout.order.len(), 4);
@@ -557,14 +575,7 @@ mod tests {
         app.pan_y = 0;
         let text = screen(&app, 180, 30);
         assert!(text.contains("Graph: caller -> callee"));
-        let graph_at = |text: &str, x: usize, y: usize| {
-            text.lines()
-                .nth(y + 5)
-                .unwrap()
-                .chars()
-                .nth(x + 26)
-                .unwrap()
-        };
+        let graph_at = |text: &str, x: usize, y: usize| graph_char(text, x as i32, y as i32);
         let shared = app
             .layout
             .components
@@ -619,15 +630,6 @@ mod tests {
             graph_at(&text, (root.x - 1) as usize, (root.y + 1) as usize),
             '→'
         );
-        assert_eq!(
-            text.lines()
-                .skip(5)
-                .take(23)
-                .flat_map(|line| line.chars().skip(26).take(122).collect::<Vec<_>>())
-                .filter(|&ch| ch == '→')
-                .count(),
-            3
-        );
         for component in &app.layout.components {
             let (x, y) = (component.x as usize, component.y as usize);
             assert_eq!(graph_at(&text, x, y), '┌');
@@ -646,7 +648,6 @@ mod tests {
         assert!(text.contains("shared"));
         assert!(text.contains("root"));
 
-        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         for _ in 0..2 {
             app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
@@ -658,7 +659,7 @@ mod tests {
         );
         assert!(panned.contains('─'));
         assert!(panned.contains('→'));
-        assert_eq!(panned.lines().nth(6).unwrap().chars().nth(25), Some('│'));
+        assert_eq!(panned.lines().nth(6).unwrap().chars().next(), Some('│'));
     }
     #[test]
     fn expanded_node_reflows_same_column_and_follows_graph_selection() {
@@ -670,18 +671,7 @@ mod tests {
         let fixture = session(&[], &target);
         let mode = mode();
         let mut app = state::App::new(&fixture, &mode, 2);
-        let root_index = app
-            .roots
-            .iter()
-            .position(|root| app.name_for_root(root) == "root")
-            .unwrap();
-        for _ in 0..root_index {
-            app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        }
-        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-        for _ in 0..2 {
-            app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        }
+        select_title(&mut app, "a.py:a");
         let first = selected_component(&app, app.selected_node.as_ref().unwrap());
         assert_eq!(first.title, "a.py:a");
         let other_y = app
@@ -732,14 +722,7 @@ mod tests {
         );
         let mode = mode();
         let mut app = state::App::new(&fixture, &mode, 1);
-        let changed = app
-            .roots
-            .iter()
-            .position(|root| app.name_for_root(root).ends_with("::rust_root"))
-            .unwrap();
-        for _ in 0..changed {
-            app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        }
+        select_title(&mut app, "lib.rs:rust_root");
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let selected = app.selected_node.as_ref().unwrap();
         let root = app
@@ -752,8 +735,9 @@ mod tests {
         assert!(root.width >= root.title.chars().count() as i32 + 2);
         let changed_text = screen(&app, 180, 40);
         assert_eq!(node_line(&app, &changed_text, root, 1), "lib.rs:rust_root");
-        assert!(changed_text.contains("Source:"));
-        assert!(changed_text.contains("Call evidence:"));
+        assert!(root.description.starts_with("Location: src/lib.rs:"));
+        assert!(changed_text.contains("Source [target]:"));
+        assert!(changed_text.contains("Call evidence [target]:"));
         assert!(
             !root
                 .extra
@@ -761,22 +745,18 @@ mod tests {
                 .any(|line| line.contains("Cargo.toml:bin:"))
         );
         assert!(changed_text.contains("src/lib.rs"));
-        assert_eq!(app.layout.order.len(), 2);
-        let deleted = app
-            .roots
-            .iter()
-            .position(|root| app.name_for_root(root).ends_with("::gone"))
-            .unwrap();
-        while app.root_index > deleted {
-            app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-        }
-        while app.root_index < deleted {
-            app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
-        }
-        let deleted_text = screen(&app, 120, 30);
-        assert!(deleted_text.contains("[deleted] base"));
-        assert!(deleted_text.contains("gone"));
-        assert_eq!(app.layout.order.len(), 2);
+        assert!(app.layout.order.len() >= 3);
+        select_title(&mut app, "lib.rs:gone");
+        let deleted = selected_component(&app, app.selected_node.as_ref().unwrap());
+        assert!(deleted.extra.iter().any(|line| line == "Change: deleted"));
+        assert!(deleted.extra.iter().any(|line| line == "Source [base]:"));
+        assert!(
+            deleted
+                .extra
+                .iter()
+                .any(|line| line == "Call evidence [base]:")
+        );
+        assert!(!deleted.extra.iter().any(|line| line == "Source [target]:"));
     }
 
     #[test]
@@ -797,14 +777,208 @@ mod tests {
         let component = selected_component(&app, app.selected_node.as_ref().unwrap());
         assert_eq!(component.title, format!("lib.rs:{name}"));
         assert!(component.width >= component.title.len() as i32 + 2);
-        assert!(component.width > 93);
+        assert!(component.width > 118);
         app.pan_x = i32::MAX;
-        app.clamp(Rect::new(0, 0, 93, 22));
+        app.clamp(Rect::new(0, 0, 118, 23));
         let component = selected_component(&app, app.selected_node.as_ref().unwrap());
         let text = screen(&app, 120, 30);
         assert!(text.contains(&name[name.len() - 20..]));
-        let right = (26 + component.x + component.width - 1 - app.pan_x) as usize;
-        assert_eq!(text.lines().nth(6).unwrap().chars().nth(right), Some('│'));
+        let right = (1 + component.x + component.width - 1 - app.pan_x) as usize;
+        assert_eq!(text.lines().nth(7).unwrap().chars().nth(right), Some('│'));
+    }
+
+    #[test]
+    fn unrelated_changed_roots_are_visible_at_zero_depth_as_separate_islands() {
+        let fixture = session(
+            &[
+                (b"a.py", b"def alpha(): return 1\n"),
+                (b"b.py", b"def beta(): return 1\n"),
+            ],
+            &[
+                (b"a.py", b"def alpha(): return 2\n"),
+                (b"b.py", b"def beta(): return 2\n"),
+            ],
+        );
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 0);
+        assert_eq!(app.changed_roots.len(), 2);
+        assert_eq!(app.layout.components.len(), 2);
+        assert!(app.layout.edges.is_empty());
+        let a = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "a.py:alpha")
+            .unwrap();
+        let b = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "b.py:beta")
+            .unwrap();
+        assert_ne!(a.cluster, b.cluster);
+        assert_eq!(a.x, b.x);
+        assert!(b.y >= a.y + a.height + 3);
+        app.pan_x = 0;
+        app.pan_y = 0;
+        let visible = screen(&app, 120, 30);
+        assert_eq!(node_line(&app, &visible, a, 1), a.title);
+        assert_eq!(node_line(&app, &visible, b, 1), b.title);
+        let selected = app.selected_node.clone();
+        app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
+        assert_eq!(app.depth, 1);
+        assert_eq!(app.selected_node, selected);
+        app.handle_key(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE));
+        assert_eq!(app.depth, 0);
+        assert_eq!(app.selected_node, selected);
+    }
+
+    #[test]
+    fn independent_caller_chains_stay_separate_and_reuse_unchanged_nodes() {
+        let fixture = session(
+            &[
+                (
+                    b"a.py",
+                    b"def alpha(): return 1\ndef caller_a(): return alpha()\n",
+                ),
+                (
+                    b"b.py",
+                    b"def beta(): return 1\ndef caller_b(): return beta()\n",
+                ),
+            ],
+            &[
+                (
+                    b"a.py",
+                    b"def alpha(): return 2\ndef caller_a(): return alpha()\n",
+                ),
+                (
+                    b"b.py",
+                    b"def beta(): return 2\ndef caller_b(): return beta()\n",
+                ),
+            ],
+        );
+        let mode = mode();
+        let app = state::App::new(&fixture, &mode, 1);
+        assert_eq!(app.changed_roots.len(), 2);
+        assert_eq!(app.layout.components.len(), 4);
+        assert_eq!(app.impact.edges.len(), 2);
+        let find = |title| {
+            app.layout
+                .components
+                .iter()
+                .find(|c| c.title == title)
+                .unwrap()
+        };
+        for (root, caller) in [
+            ("a.py:alpha", "a.py:caller_a"),
+            ("b.py:beta", "b.py:caller_b"),
+        ] {
+            let root = find(root);
+            let caller = find(caller);
+            assert_eq!(root.cluster, caller.cluster);
+            assert!(caller.x < root.x);
+            assert!(app.nodes[&caller.members[0]].changes.is_empty());
+            assert!(app.nodes[&caller.members[0]].base.is_some());
+            assert!(app.nodes[&caller.members[0]].target.is_some());
+            let contributors = &app.edges[&(caller.members[0].clone(), root.members[0].clone())];
+            assert_eq!(contributors.len(), 1);
+            assert_eq!(contributors[0].0, SnapshotRole::Target);
+        }
+        assert_ne!(find("a.py:alpha").cluster, find("b.py:beta").cluster);
+    }
+
+    #[test]
+    fn shared_unchanged_caller_links_both_changed_roots_without_duplicate_edges() {
+        let before =
+            b"def alpha(): return 1\ndef beta(): return 1\ndef shared(): return alpha() + beta()\n";
+        let after =
+            b"def alpha(): return 2\ndef beta(): return 2\ndef shared(): return alpha() + beta()\n";
+        let fixture = session(&[(b"a.py", before)], &[(b"a.py", after)]);
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 0);
+        assert_eq!(app.layout.components.len(), 2);
+        assert!(app.impact.edges.is_empty());
+        app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
+        assert_eq!(app.layout.components.len(), 3);
+        assert_eq!(app.impact.edges.len(), 2);
+        let shared = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "a.py:shared")
+            .unwrap();
+        assert!(app.nodes[&shared.members[0]].changes.is_empty());
+        assert!(app.nodes[&shared.members[0]].base.is_some());
+        assert!(app.nodes[&shared.members[0]].target.is_some());
+        for title in ["a.py:alpha", "a.py:beta"] {
+            let root = app
+                .layout
+                .components
+                .iter()
+                .find(|c| c.title == title)
+                .unwrap();
+            assert_eq!(root.cluster, shared.cluster);
+            assert!(
+                app.impact
+                    .edges
+                    .contains(&(shared.members[0].clone(), root.members[0].clone()))
+            );
+        }
+        select_title(&mut app, "a.py:shared");
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        let evidence = selected_component(&app, app.selected_node.as_ref().unwrap())
+            .extra
+            .join("\n");
+        assert!(evidence.contains("Source [base]:"));
+        assert!(evidence.contains("Source [target]:"));
+        assert!(evidence.contains("Call evidence [base]:"));
+        assert!(evidence.contains("Call evidence [target]:"));
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        app.pan_x = 0;
+        app.pan_y = 0;
+        let text = screen(&app, 180, 40);
+        assert_eq!(text.matches("a.py:shared").count(), 1);
+    }
+
+    #[test]
+    fn duplicate_definitions_remain_distinct_even_when_titles_match() {
+        let fixture = session(
+            &[(b"a.py", b"def f(): return 1\ndef f(): return 2\n")],
+            &[(b"a.py", b"def f(): return 3\ndef f(): return 4\n")],
+        );
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 0);
+        assert_eq!(app.changed_roots.len(), 4);
+        assert_eq!(app.layout.components.len(), 4);
+        assert!(app.layout.components.iter().all(|c| c.title == "a.py:f"));
+        assert!(app.layout.components.iter().all(|c| c.members.len() == 1));
+        let ids: std::collections::BTreeSet<_> = app
+            .layout
+            .components
+            .iter()
+            .flat_map(|component| &component.members)
+            .collect();
+        assert_eq!(ids.len(), 4);
+        assert_eq!(
+            ids.iter()
+                .filter(|id| app.nodes[id.as_str()].base.is_some())
+                .count(),
+            2
+        );
+        assert_eq!(
+            ids.iter()
+                .filter(|id| app.nodes[id.as_str()].target.is_some())
+                .count(),
+            2
+        );
+        assert!(
+            ids.iter().all(|id| app.nodes[id.as_str()].base.is_none()
+                || app.nodes[id.as_str()].target.is_none())
+        );
+        app.pan_x = 0;
+        app.pan_y = 0;
+        let text = screen(&app, 120, 60);
+        assert_eq!(text.matches("a.py:f").count(), 4);
     }
 
     #[test]

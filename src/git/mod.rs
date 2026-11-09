@@ -16,7 +16,7 @@ pub enum SnapshotKind {
     WorkingTree,
     Empty,
 }
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub enum SnapshotRole {
     Base,
     Target,
