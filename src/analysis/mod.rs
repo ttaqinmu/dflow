@@ -90,6 +90,8 @@ pub struct Symbol {
     pub qualified_name: String,
     pub kind: SymbolKind,
     pub fingerprint: String,
+    pub direct_fingerprint: String,
+    pub non_call_fingerprint: String,
     pub decorated: bool,
     pub conditional: bool,
     pub unknown_attribute: bool,
@@ -194,13 +196,21 @@ pub struct ChangeAnalysis {
     pub complete: bool,
 }
 
-pub fn fingerprint(parts: impl IntoIterator<Item = Vec<u8>>) -> String {
-    let mut h = Sha256::new();
-    for part in parts {
-        h.update((part.len() as u64).to_be_bytes());
-        h.update(part);
+pub struct FingerprintBuilder(Sha256);
+
+impl FingerprintBuilder {
+    pub fn new() -> Self {
+        Self(Sha256::new())
     }
-    format!("{:x}", h.finalize())
+
+    pub fn push(&mut self, part: &[u8]) {
+        self.0.update((part.len() as u64).to_be_bytes());
+        self.0.update(part);
+    }
+
+    pub fn finish(self) -> String {
+        format!("{:x}", self.0.finalize())
+    }
 }
 
 pub fn extract_snapshot(snapshot: &CapturedSnapshot) -> ExtractedSnapshot {
@@ -348,7 +358,7 @@ pub fn classify_symbols(base: &ExtractedSnapshot, target: &ExtractedSnapshot) ->
                 continue;
             }
             match (bs.first(), as_.first()) {
-                (Some(b), Some(a)) if b.fingerprint != a.fingerprint => {
+                (Some(b), Some(a)) if b.direct_fingerprint != a.direct_fingerprint => {
                     changes.push(SymbolChange {
                         kind: SymbolChangeKind::Modified,
                         before: Some(b.clone()),
@@ -479,13 +489,39 @@ mod tests {
             )],
         );
         let changes = classify_symbols(&extract_snapshot(&before), &extract_snapshot(&after));
-        assert_eq!(changes.changes.len(), 2);
-        assert!(
-            changes
-                .changes
-                .iter()
-                .all(|c| c.kind == SymbolChangeKind::Modified)
-        );
+        assert_eq!(changes.changes.len(), 1);
+        assert_eq!(changes.changes[0].kind, SymbolChangeKind::Modified);
+        assert_eq!(changes.changes[0].after.as_ref().unwrap().name, "inner");
+    }
+    #[test]
+    fn python_direct_and_non_call_fingerprints_separate_changes() {
+        let symbol = |source: &'static [u8]| {
+            extract_snapshot(&snapshot(SnapshotRole::Base, &[(b"a.py", source)])).files
+                [&SourceUnitKey::python(b"a.py")]
+                .symbols[0]
+                .clone()
+        };
+        let original =
+            symbol(b"def f(x=1):\n    \"doc\"\n    def inner(): return 1\n    return B(x)\n");
+        let nested =
+            symbol(b"def f(x=1):\n    \"doc\"\n    def inner(): return 2\n    return B(x)\n");
+        assert_eq!(original.direct_fingerprint, nested.direct_fingerprint);
+        let retarget =
+            symbol(b"def f(x=1):\n    \"doc\"\n    def inner(): return 1\n    return C(x)\n");
+        assert_ne!(original.direct_fingerprint, retarget.direct_fingerprint);
+        assert_eq!(original.non_call_fingerprint, retarget.non_call_fingerprint);
+        for changed in [
+            b"def f(x=2):\n    \"doc\"\n    def inner(): return 1\n    return B(x)\n".as_slice(),
+            b"def f(x=1):\n    \"new doc\"\n    def inner(): return 1\n    return B(x)\n",
+            b"def f(x=1):\n    \"doc\"\n    def inner(): return 1\n    return B(2)\n",
+            b"def f(x=1):\n    \"doc\"\n    def inner(): return 1\n    B(x)\n",
+        ] {
+            assert_ne!(
+                original.non_call_fingerprint,
+                symbol(changed).non_call_fingerprint
+            );
+        }
+        assert_eq!(original.direct_fingerprint, symbol(b"def f( x = 1 ):\n    \"doc\"\n    def inner(): return 1\n    return B(x) # layout\n").direct_fingerprint);
     }
     #[test]
     fn broken_source_does_not_fabricate_deletions() {

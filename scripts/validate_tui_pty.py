@@ -97,9 +97,10 @@ class Screen:
 
 def canvas(screen: Screen) -> str:
     rows = screen.rows()
-    assert rows[0].startswith("┌DFlow"), "DFlow information header was not drawn"
-    assert rows[5].startswith("┌Graph: caller -> callee"), "graph was not drawn below the header"
-    assert rows[5][-1] == "┐" and rows[-1][0] == "└" and rows[-1][-1] == "┘", "graph border did not fill terminal width and height"
+    assert rows[0].startswith("┌─"), "header border was not drawn without a title"
+    assert rows[3][0] == "└" and rows[4].startswith("┌─"), "graph border was not drawn below the header without a title"
+    assert "q quit" not in "\n".join(rows[:4]), "obsolete quit hint appeared in the header"
+    assert rows[4][-1] == "┐" and rows[-1][0] == "└" and rows[-1][-1] == "┘", "graph border did not fill terminal width and height"
     image = "\n".join(rows)
     assert "Changes" not in image, "obsolete Changes panel appeared"
     return image
@@ -137,7 +138,7 @@ def collect(master: int, process: subprocess.Popen[bytes], marker: bytes | None,
     return bytes(output)
 
 
-def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"", fault: str | None = None, resize: bool = False, help_key: bool = False, expand_node: bool = False, node_title: bytes | None = None, canvas_titles: tuple[str, str] | None = None) -> tuple[int, bytes]:
+def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"", fault: str | None = None, resize: bool = False, help_key: bool = False, expand_node: bool = False, node_title: bytes | None = None, canvas_titles: tuple[str, str] | None = None, edge_glyphs: bool = False) -> tuple[int, bytes]:
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
     before = termios.tcgetattr(slave)
@@ -166,8 +167,22 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
             image = canvas(screen)
             for title in canvas_titles:
                 assert title in image, f"unrelated changed root {title!r} was not visible on initial screen"
+            assert any(f"*{title}" in image for title in canvas_titles), "selected graph title was not marked"
             assert "complete" in image
             assert "base " in image and "target " in image, "both snapshot identities were not shown"
+        if edge_glyphs:
+            def check_edges() -> None:
+                image = canvas(screen)
+                assert "+→" in image and "-→" in image, "changed edge markers disappeared from visible collapsed graph"
+            check_edges()
+            assert "0 symbols | 2 edge changes" in canvas(screen)
+            output += input_and_redraw(master, process, screen, b"d", None)
+            assert "Edge deleted [base]" in canvas(screen), "expanded snapshot edge evidence missing"
+            output += input_and_redraw(master, process, screen, b"d", None)
+            check_edges()
+            for key in (b"j", b"\x1b[1;2C", b"\x1b[1;2D", b"+", b"-"):
+                output += input_and_redraw(master, process, screen, key, None)
+                check_edges()
         if expand_node:
             assert b"Details" not in output, "separate Details panel appeared initially"
             assert node_title is not None and node_title in output, "node title was not visible"
@@ -177,9 +192,9 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
             output += expanded_output
         if canvas_titles is not None:
             assert "Source [target]:" in canvas(screen), "d did not expand selected-node source in the graph"
-            before_pan = screen.rows()[6:-1]
+            before_pan = screen.rows()[5:-1]
             output += input_and_redraw(master, process, screen, b"\x1b[1;2C", None)
-            assert screen.rows()[6:-1] != before_pan, "Shift+Right did not pan the expanded wide node"
+            assert screen.rows()[5:-1] != before_pan, "Shift+Right did not pan the expanded wide node"
             output += input_and_redraw(master, process, screen, b"\x1b[6~", None)
             output += input_and_redraw(master, process, screen, b"d", None)
             image = canvas(screen)
@@ -192,6 +207,10 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
             image = canvas(screen)
             for title in canvas_titles:
                 assert title in image, f"changed root {title!r} disappeared after depth refresh"
+            before_selection = re.findall(r"\*([^ │\n]+)", image)
+            output += input_and_redraw(master, process, screen, b"j", None)
+            after_selection = re.findall(r"\*([^ │\n]+)", canvas(screen))
+            assert len(before_selection) == len(after_selection) == 1 and before_selection != after_selection, "graph selection marker did not move with j"
         if resize:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 100, 0, 0))
             screen.resize(100, 20)
@@ -203,6 +222,8 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
             if canvas_titles is not None:
                 canvas(screen)
             output += resized_output
+            if edge_glyphs:
+                check_edges()
         if help_key:
             help_output = input_and_redraw(master, process, screen, b"?", None)
             assert "DFlow keyboard help" in "\n".join(screen.rows()), "help key did not open help"
@@ -245,10 +266,17 @@ def main() -> None:
         source.write_text("def f(): return 2  # " + "wide-node-evidence-" * 9 + "\ndef from_a(): return f()\n")
         other_source.write_text("def other(): return 2\ndef from_b(): return other()\n")
 
-        code, output = run_case(binary, root, marker=b"Graph:", keys=b"q", resize=True, help_key=True, expand_node=True, node_title=b"a.py:f", canvas_titles=("a.py:f", "b.py:other"))
+        code, output = run_case(binary, root, marker=b"depth:", keys=b"q", resize=True, help_key=True, expand_node=True, node_title=b"a.py:f", canvas_titles=("a.py:f", "b.py:other"))
         assert code == 0 and b"complete" in output
         assert "─".encode() in output, "normal graph did not draw box lines"
         assert b"\x1b[38;5;3;49m" in output, "modified change did not receive yellow terminal styling"
+        source.write_text("def B(x): return x\ndef C(x): return x\ndef A(x): return B(x)\n")
+        other_source.write_text("")
+        git(root, "add", "a.py", "b.py")
+        git(root, "commit", "-m", "edge base")
+        source.write_text("def B(x): return x\ndef C(x): return x\ndef A(x): return C(x)\n")
+        code, output = run_case(binary, root, marker=b"depth:", keys=b"q", resize=True, edge_glyphs=True)
+        assert code == 0
 
         source.write_text("def f(:\n")
         code, output = run_case(binary, root, marker=b"PARTIAL", keys=b"\x03")
@@ -270,10 +298,10 @@ def main() -> None:
         git(root, "add", "a.py", "b.py", "Cargo.toml", "src/lib.rs")
         git(root, "commit", "-m", "rust base")
         rust_source.write_text("pub fn rust_root() -> i32 { 2 }\npub fn caller() -> i32 { rust_root() }\n")
-        code, output = run_case(binary, root, marker=b"Graph", keys=b"q", expand_node=True, node_title=b"lib.rs:rust_root")
+        code, output = run_case(binary, root, marker=b"depth:", keys=b"q", expand_node=True, node_title=b"lib.rs:rust_root")
         assert code == 0 and b"rust_root" in output
 
-        print("PTY: simultaneous disconnected Python roots, graph expansion, depth, pan, help, full-width resize, Rust expansion, partial Ctrl-C, panic, error, and terminal restoration passed")
+        print("PTY: changed edge markers across redraw, pan, navigation, expansion and resize; Python/Rust graph, partial analysis, faults, and terminal restoration passed")
 
 
 if __name__ == "__main__":

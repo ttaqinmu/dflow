@@ -175,13 +175,13 @@ mod tests {
         row: i32,
     ) -> String {
         let x = (1 + component.x - app.pan_x) as usize;
-        let y = (6 + component.y - app.pan_y + row) as usize;
+        let y = (5 + component.y - app.pan_y + row) as usize;
         text.lines()
             .nth(y)
             .unwrap()
             .chars()
-            .skip(x + 1)
-            .take((component.width - 2) as usize)
+            .skip(x + if row == 1 { 2 } else { 1 })
+            .take((component.width - if row == 1 { 3 } else { 2 }) as usize)
             .collect::<String>()
             .trim_end()
             .to_owned()
@@ -232,7 +232,7 @@ mod tests {
     }
     fn graph_char(text: &str, x: i32, y: i32) -> char {
         text.lines()
-            .nth((6 + y) as usize)
+            .nth((5 + y) as usize)
             .unwrap()
             .chars()
             .nth((1 + x) as usize)
@@ -249,7 +249,7 @@ mod tests {
         let mode = mode();
         let app = state::App::new(&fixture, &mode, 1);
         let text = screen(&app, 120, 30);
-        assert!(text.contains("Graph: caller -> callee"));
+        assert!(text.lines().next().unwrap().starts_with("┌─"));
         assert!(!text.contains("Call evidence ["));
         assert!(!text.contains("Details"));
         let selected = app.selected_node.as_ref().unwrap();
@@ -264,7 +264,7 @@ mod tests {
         assert!(root.description.starts_with("Location: a.py:"));
         assert!(root.width >= root.title.chars().count() as i32 + 2);
         assert_eq!(root.height, 5);
-        assert!(text.lines().skip(6).any(|line| line.contains('→')));
+        assert!(text.lines().skip(5).any(|line| line.contains('→')));
         let mut app = app;
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let text = screen(&app, 120, 30);
@@ -367,7 +367,7 @@ mod tests {
         assert_eq!(original_height, 5);
         assert!(original_width >= 26);
         assert_eq!(node_line(&app, &hidden, original, 3), original.description);
-        assert_eq!(hidden.lines().nth(6).unwrap().chars().nth(179), Some('│'));
+        assert_eq!(hidden.lines().nth(5).unwrap().chars().nth(179), Some('│'));
 
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let expanded = selected_component(&app, &selected);
@@ -410,7 +410,7 @@ mod tests {
         let mode = mode();
         let empty = session(&[], &[]);
         let app = state::App::new(&empty, &mode, 1);
-        assert!(screen(&app, 120, 30).contains("No changed symbols"));
+        assert!(screen(&app, 120, 30).contains("No symbol or edge changes"));
         assert!(screen(&app, 50, 10).contains("Terminal too small"));
         let bad = session(&[], &[(b"bad.py", b"def f(:\n")]);
         let mut app = state::App::new(&bad, &mode, 1);
@@ -483,11 +483,37 @@ mod tests {
             assert!(app.nodes[&component.members[0]].changes.contains(&kind));
             let mut terminal = Terminal::new(TestBackend::new(180, 50)).unwrap();
             terminal.draw(|frame| render::render(&app, frame)).unwrap();
-            let box_cell =
-                &terminal.backend().buffer()[((1 + component.x) as u16, (6 + component.y) as u16)];
+            let buffer = terminal.backend().buffer();
+            let box_cell = &buffer[((1 + component.x) as u16, (5 + component.y) as u16)];
             assert_eq!(box_cell.symbol(), "┌");
             assert_eq!(box_cell.fg, color);
-            assert!(box_cell.modifier.contains(Modifier::REVERSED));
+            assert!(
+                !box_cell
+                    .modifier
+                    .intersects(Modifier::BOLD | Modifier::REVERSED)
+            );
+            let marker = &buffer[((2 + component.x) as u16, (6 + component.y) as u16)];
+            assert_eq!(marker.symbol(), "*");
+            assert_eq!(marker.fg, color);
+            assert!(
+                !marker
+                    .modifier
+                    .intersects(Modifier::BOLD | Modifier::REVERSED)
+            );
+            let title = &buffer[((3 + component.x) as u16, (6 + component.y) as u16)];
+            assert_eq!(title.fg, color);
+            assert!(
+                !title
+                    .modifier
+                    .intersects(Modifier::BOLD | Modifier::REVERSED)
+            );
+            let description = &buffer[((2 + component.x) as u16, (8 + component.y) as u16)];
+            assert_eq!(description.fg, color);
+            assert!(
+                !description
+                    .modifier
+                    .intersects(Modifier::BOLD | Modifier::REVERSED)
+            );
             app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
             let details = selected_component(&app, app.selected_node.as_ref().unwrap())
                 .extra
@@ -509,7 +535,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_node_title_padding_uses_the_same_background_as_its_text() {
+    fn selected_graph_marker_follows_navigation() {
         let target = [(
             b"a.py".as_slice(),
             b"def f(): pass\ndef g(): f()\n".as_slice(),
@@ -518,43 +544,87 @@ mod tests {
         let mode = mode();
         let mut app = state::App::new(&fixture, &mode, 1);
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
-        for _ in 0..2 {
-            terminal.draw(|frame| render::render(&app, frame)).unwrap();
-            let component = selected_component(&app, app.selected_node.as_ref().unwrap());
-            let title_y = (7 + component.y - app.pan_y) as u16;
-            let padding_start = (2 + component.x - app.pan_x) as u16 + component.title.len() as u16;
-            let right = (1 + component.x + component.width - 1 - app.pan_x) as u16;
-            assert!(padding_start < right);
-            for x in padding_start..right {
-                let cell = &terminal.backend().buffer()[(x, title_y)];
-                assert_eq!(cell.symbol(), " ");
-                assert_eq!(cell.fg, Color::Green);
-                assert!(cell.modifier.contains(Modifier::REVERSED));
+
+        let check = |app: &state::App<'_>, terminal: &mut Terminal<TestBackend>| {
+            terminal.draw(|frame| render::render(app, frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            for component in &app.layout.components {
+                let selected = app
+                    .selected_node
+                    .as_ref()
+                    .is_some_and(|id| component.members.contains(id));
+                let marker_x = (2 + component.x - app.pan_x) as u16;
+                let title_x = marker_x + 1;
+                let y = (6 + component.y - app.pan_y) as u16;
+                let marker = &buffer[(marker_x, y)];
+                assert_eq!(marker.symbol(), if selected { "*" } else { " " });
+                assert_eq!(marker.fg, Color::Green);
+                assert!(
+                    !marker
+                        .modifier
+                        .intersects(Modifier::BOLD | Modifier::REVERSED)
+                );
+                let title = &buffer[(title_x, y)];
+                assert_eq!(title.symbol(), &component.title[..1]);
+                assert_eq!(title.fg, Color::Green);
+                assert!(
+                    !title
+                        .modifier
+                        .intersects(Modifier::BOLD | Modifier::REVERSED)
+                );
+                let padding = &buffer[(title_x + component.title.len() as u16, y)];
+                assert_eq!(padding.symbol(), " ");
+                assert_eq!(padding.fg, Color::Green);
+                assert!(
+                    !padding
+                        .modifier
+                        .intersects(Modifier::BOLD | Modifier::REVERSED)
+                );
+                for &(cell_x, cell_y) in &[(marker_x - 1, y - 1), (marker_x, y + 2)] {
+                    let cell = &buffer[(cell_x, cell_y)];
+                    assert_eq!(cell.fg, Color::Green);
+                    assert!(
+                        !cell
+                            .modifier
+                            .intersects(Modifier::BOLD | Modifier::REVERSED)
+                    );
+                }
+                if !component.extra.is_empty() {
+                    let detail = &buffer[(marker_x, y + 4)];
+                    assert_eq!(detail.fg, Color::Green);
+                    assert!(
+                        !detail
+                            .modifier
+                            .intersects(Modifier::BOLD | Modifier::REVERSED)
+                    );
+                }
             }
-            app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-        }
-        select_title(&mut app, "a.py:g");
-        terminal.draw(|frame| render::render(&app, frame)).unwrap();
-        let former = app
+        };
+
+        app.pan_x = 0;
+        app.pan_y = 0;
+        check(&app, &mut terminal);
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        app.pan_x = 0;
+        app.pan_y = 0;
+        check(&app, &mut terminal);
+        let initial = app.selected_node.clone();
+        let index = app
             .layout
-            .components
+            .order
             .iter()
-            .find(|component| component.title == "a.py:f")
+            .position(|id| Some(id) == initial.as_ref())
             .unwrap();
-        let x = (2 + former.x - app.pan_x) as u16 + former.title.len() as u16;
-        let y = (7 + former.y - app.pan_y) as u16;
-        let cell = &terminal.backend().buffer()[(x, y)];
-        assert_eq!(cell.symbol(), " ");
-        assert_eq!(cell.fg, Color::Green);
-        assert!(!cell.modifier.contains(Modifier::REVERSED));
-        let selected = selected_component(&app, app.selected_node.as_ref().unwrap());
-        let x = (2 + selected.x - app.pan_x) as u16 + selected.title.len() as u16;
-        let y = (7 + selected.y - app.pan_y) as u16;
-        assert!(
-            terminal.backend().buffer()[(x, y)]
-                .modifier
-                .contains(Modifier::REVERSED)
-        );
+        let key = if index + 1 < app.layout.order.len() {
+            'j'
+        } else {
+            'k'
+        };
+        app.handle_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE));
+        assert_ne!(app.selected_node, initial);
+        app.pan_x = 0;
+        app.pan_y = 0;
+        check(&app, &mut terminal);
     }
 
     #[test]
@@ -574,62 +644,14 @@ mod tests {
         app.pan_x = 0;
         app.pan_y = 0;
         let text = screen(&app, 180, 30);
-        assert!(text.contains("Graph: caller -> callee"));
+        assert!(text.lines().nth(4).unwrap().starts_with("┌─"));
         let graph_at = |text: &str, x: usize, y: usize| graph_char(text, x as i32, y as i32);
-        let shared = app
-            .layout
-            .components
-            .iter()
-            .find(|c| c.title == "a.py:shared")
-            .unwrap();
-        let first_lane = shared.x + shared.width + 3;
-        let middle = app
-            .layout
-            .components
-            .iter()
-            .find(|c| c.title == "a.py:a")
-            .unwrap();
-        let second_lane = middle.x + middle.width + 3;
-        let lower = app
-            .layout
-            .components
-            .iter()
-            .find(|c| c.title == "a.py:b")
-            .unwrap();
-        assert_eq!(
-            graph_at(&text, first_lane as usize, (shared.y + 1) as usize),
-            '┬'
-        );
-        assert_eq!(
-            graph_at(&text, first_lane as usize, (lower.y + 1) as usize),
-            '└'
-        );
-        assert_eq!(
-            graph_at(&text, second_lane as usize, (middle.y + 1) as usize),
-            '┬'
-        );
-        assert_eq!(
-            graph_at(&text, second_lane as usize, (lower.y + 1) as usize),
-            '┘'
-        );
-        assert_eq!(
-            graph_at(&text, (middle.x - 1) as usize, (middle.y + 1) as usize),
-            '→'
-        );
-        assert_eq!(
-            graph_at(&text, (lower.x - 1) as usize, (lower.y + 1) as usize),
-            '→'
-        );
-        let root = app
-            .layout
-            .components
-            .iter()
-            .find(|c| c.title == "a.py:root")
-            .unwrap();
-        assert_eq!(
-            graph_at(&text, (root.x - 1) as usize, (root.y + 1) as usize),
-            '→'
-        );
+        for edge in &app.layout.edges {
+            let callee = &app.layout.components[edge.to];
+            let y = callee.y + 1 + edge.port as i32;
+            assert_eq!(graph_at(&text, (callee.x - 1) as usize, y as usize), '→');
+            assert!(y < callee.y + callee.height - 1);
+        }
         for component in &app.layout.components {
             let (x, y) = (component.x as usize, component.y as usize);
             assert_eq!(graph_at(&text, x, y), '┌');
@@ -659,7 +681,7 @@ mod tests {
         );
         assert!(panned.contains('─'));
         assert!(panned.contains('→'));
-        assert_eq!(panned.lines().nth(6).unwrap().chars().next(), Some('│'));
+        assert_eq!(panned.lines().nth(5).unwrap().chars().next(), Some('│'));
     }
     #[test]
     fn expanded_node_reflows_same_column_and_follows_graph_selection() {
@@ -784,7 +806,7 @@ mod tests {
         let text = screen(&app, 120, 30);
         assert!(text.contains(&name[name.len() - 20..]));
         let right = (1 + component.x + component.width - 1 - app.pan_x) as usize;
-        assert_eq!(text.lines().nth(7).unwrap().chars().nth(right), Some('│'));
+        assert_eq!(text.lines().nth(6).unwrap().chars().nth(right), Some('│'));
     }
 
     #[test]
@@ -990,5 +1012,131 @@ mod tests {
         let app = state::App::new(&fixture, &mode, 1);
         let text = screen(&app, 120, 30);
         assert!(!text.contains('\u{1b}'));
+    }
+    #[test]
+    fn changed_edges_get_separate_ports_without_coloring_endpoints() {
+        let before = b"def B(): pass\ndef D(): pass\ndef A(): B()\ndef C(): D()\ndef X(): B()\n";
+        let after = b"def B(): pass\ndef D(): pass\ndef A(): D()\ndef C(): B()\ndef X(): B()\n";
+        let fixture = session(&[(b"a.py", before)], &[(b"a.py", after)]);
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 0);
+        assert!(app.changed_roots.is_empty());
+        assert_eq!(app.edge_status.len(), 4);
+        assert!(app.selected_node.is_some());
+        assert!(app.nodes.values().all(|node| node.changes.is_empty()));
+        app.pan_x = 0;
+        app.pan_y = 0;
+        let text = screen(&app, 200, 60);
+        let b = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "a.py:B")
+            .unwrap();
+        let routes: Vec<_> = app
+            .layout
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.to
+                    == app
+                        .layout
+                        .components
+                        .iter()
+                        .position(|c| std::ptr::eq(c, b))
+                        .unwrap()
+            })
+            .collect();
+        assert_eq!(routes.len(), 2);
+        assert_ne!(routes[0].port, routes[1].port);
+        for route in routes {
+            let marker = match app.edge_status[&(route.caller.clone(), route.callee.clone())] {
+                crate::graph::EdgeChangeKind::Added => '+',
+                crate::graph::EdgeChangeKind::Deleted => '-',
+            };
+            assert_eq!(
+                graph_char(&text, b.x - 2, b.y + 1 + route.port as i32),
+                marker
+            );
+            assert_eq!(graph_char(&text, b.x - 1, b.y + 1 + route.port as i32), '→');
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
+        assert!(screen(&app, 200, 60).contains("─→"));
+        app.pan_x = 0;
+        app.pan_y = 0;
+        let mut terminal = Terminal::new(TestBackend::new(200, 60)).unwrap();
+        terminal.draw(|frame| render::render(&app, frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        for route in &app.layout.edges {
+            let callee = &app.layout.components[route.to];
+            let x = (callee.x) as u16;
+            let y = (6 + callee.y + route.port as i32) as u16;
+            let expected = match route.status {
+                Some(crate::graph::EdgeChangeKind::Added) => Color::Green,
+                Some(crate::graph::EdgeChangeKind::Deleted) => Color::Red,
+                None => Color::Reset,
+            };
+            assert_eq!(buffer[(x - 2, y)].fg, expected);
+            assert_eq!(buffer[(x - 1, y)].fg, expected);
+            assert_eq!(buffer[(x, y)].fg, expected);
+        }
+        let a = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "a.py:A")
+            .unwrap();
+        assert_eq!(
+            buffer[((2 + a.x + a.width) as u16, (6 + a.y) as u16)].fg,
+            Color::Reset
+        );
+        let b = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "a.py:B")
+            .unwrap();
+        assert_eq!(
+            buffer[((1 + b.x) as u16, (5 + b.y) as u16)].fg,
+            Color::Reset
+        );
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        app.pan_x = 0;
+        app.pan_y = 0;
+        let expanded = screen(&app, 200, 60);
+        assert!(expanded.contains("Edge "));
+        assert!(expanded.contains(" @ a.py:"));
+    }
+
+    #[test]
+    fn changed_edge_inside_cycle_is_always_labeled() {
+        let before = b"def A(): B()\ndef B(): A()\n";
+        let after = b"def A(): B()\ndef B(): A(); B()\n";
+        let fixture = session(&[(b"a.py", before)], &[(b"a.py", after)]);
+        let mode = mode();
+        let mut app = state::App::new(&fixture, &mode, 0);
+        assert_eq!(app.edge_status.len(), 1);
+        app.pan_x = 0;
+        app.pan_y = 0;
+        let text = screen(&app, 180, 40);
+        assert!(text.contains("+ a.py:B -> a.py:B [target]"));
+        assert!(
+            app.layout
+                .components
+                .iter()
+                .any(|component| component.cycle && !component.edge_labels.is_empty())
+        );
+        let component = app
+            .layout
+            .components
+            .iter()
+            .find(|c| !c.edge_labels.is_empty())
+            .unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(180, 40)).unwrap();
+        terminal.draw(|frame| render::render(&app, frame)).unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[((2 + component.x) as u16, (9 + component.y) as u16)].fg,
+            Color::Green
+        );
     }
 }

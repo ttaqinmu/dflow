@@ -478,6 +478,8 @@ mod tests {
                 SymbolKind::Function
             },
             fingerprint: String::new(),
+            direct_fingerprint: String::new(),
+            non_call_fingerprint: String::new(),
             decorated: false,
             conditional: false,
             unknown_attribute: false,

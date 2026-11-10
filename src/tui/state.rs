@@ -1,22 +1,14 @@
 use super::layout;
-use crate::analysis::{LanguageId, SourceUnitKey, SymbolChangeKind};
+use crate::analysis::SymbolChangeKind;
 use crate::cli::CompareMode;
 use crate::git::SnapshotRole;
-use crate::graph::{self, GraphNode, Impact, SnapshotGraph};
+use crate::graph::{self, EdgeChangeKind, GraphNode, Impact, SnapshotGraph};
 use crate::report::AnalysisSession;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-type SymbolKey = (SourceUnitKey, LanguageId, String, String);
 type EdgeContributor = (SnapshotRole, String, String);
-
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-enum ViewKey {
-    Symbol(SymbolKey),
-    Ambiguous(SymbolKey, SnapshotRole, String),
-    Module(SourceUnitKey),
-}
 
 #[derive(Default)]
 pub struct NodeProvenance {
@@ -30,6 +22,7 @@ pub struct App<'a> {
     pub mode: &'a CompareMode,
     pub nodes: BTreeMap<String, NodeProvenance>,
     pub edges: BTreeMap<(String, String), Vec<EdgeContributor>>,
+    pub edge_status: BTreeMap<(String, String), EdgeChangeKind>,
     pub changed_roots: Vec<String>,
     pub selected_node: Option<String>,
     pub impact: Impact,
@@ -47,6 +40,7 @@ impl<'a> App<'a> {
             mode,
             nodes: BTreeMap::new(),
             edges: BTreeMap::new(),
+            edge_status: BTreeMap::new(),
             changed_roots: Vec::new(),
             selected_node: None,
             impact: Impact {
@@ -81,54 +75,7 @@ impl<'a> App<'a> {
         (graph, &graph.graph[graph.ids[native]])
     }
     fn refresh(&mut self) {
-        // Resolve identity over both complete snapshots before unioning per-root traversals.
-        let mut groups: BTreeMap<SymbolKey, (Vec<String>, Vec<String>)> = BTreeMap::new();
-        let mut keys = BTreeMap::new();
-        for graph in [&self.session.base_graph, &self.session.target_graph] {
-            for node in graph.graph.node_weights() {
-                if let Some(symbol) = &node.symbol {
-                    let key = (
-                        symbol.unit.clone(),
-                        symbol.language,
-                        symbol.qualified_name.clone(),
-                        symbol.name.clone(),
-                    );
-                    let group = groups.entry(key).or_default();
-                    match graph.role {
-                        SnapshotRole::Base => group.0.push(node.id.clone()),
-                        SnapshotRole::Target => group.1.push(node.id.clone()),
-                    }
-                }
-            }
-            for (unit, id) in &graph.module_ids {
-                keys.insert(id.clone(), ViewKey::Module(unit.clone()));
-            }
-        }
-        for (key, (base, target)) in groups {
-            let ambiguous = base.len() > 1 || target.len() > 1;
-            for (role, ids) in [(SnapshotRole::Base, base), (SnapshotRole::Target, target)] {
-                for id in ids {
-                    keys.insert(
-                        id.clone(),
-                        if ambiguous {
-                            ViewKey::Ambiguous(key.clone(), role, id)
-                        } else {
-                            ViewKey::Symbol(key.clone())
-                        },
-                    );
-                }
-            }
-        }
-        let sorted: BTreeSet<_> = keys.values().collect();
-        let view_ids: BTreeMap<_, _> = sorted
-            .into_iter()
-            .enumerate()
-            .map(|(index, key)| (key, format!("v-{index:06}")))
-            .collect();
-        let native_to_view: BTreeMap<_, _> = keys
-            .iter()
-            .map(|(id, key)| (id.clone(), view_ids[key].clone()))
-            .collect();
+        let native_to_view = &self.session.edge_comparison.native_to_view;
         self.nodes.clear();
         for graph in [&self.session.base_graph, &self.session.target_graph] {
             for id in graph.ids.keys() {
@@ -142,6 +89,7 @@ impl<'a> App<'a> {
         let mut distances: BTreeMap<String, usize> = BTreeMap::new();
         self.changed_roots.clear();
         self.edges.clear();
+        self.edge_status.clear();
         for change in &self.session.changes.changes {
             let (role, symbol) = if change.kind == SymbolChangeKind::Deleted {
                 (SnapshotRole::Base, change.before.as_ref())
@@ -183,6 +131,39 @@ impl<'a> App<'a> {
                     .push((role, caller, callee));
             }
         }
+        for change in &self.session.edge_comparison.changes {
+            let (role, caller, callee) = if let Some((caller, callee)) = &change.before {
+                (SnapshotRole::Base, caller, callee)
+            } else if let Some((caller, callee)) = &change.after {
+                (SnapshotRole::Target, caller, callee)
+            } else {
+                continue;
+            };
+            let graph = self.graph(role);
+            let impact = graph::callers(graph, callee, self.depth);
+            for (native, distance) in impact.nodes {
+                distances
+                    .entry(native_to_view[&native].clone())
+                    .and_modify(|old| *old = (*old).min(distance))
+                    .or_insert(distance);
+            }
+            for (from, to) in impact.edges {
+                self.edges
+                    .entry((native_to_view[&from].clone(), native_to_view[&to].clone()))
+                    .or_default()
+                    .push((role, from, to));
+            }
+            distances.entry(change.caller_view.clone()).or_insert(1);
+            distances.entry(change.callee_view.clone()).or_insert(0);
+            self.edges
+                .entry((change.caller_view.clone(), change.callee_view.clone()))
+                .or_default()
+                .push((role, caller.clone(), callee.clone()));
+            self.edge_status.insert(
+                (change.caller_view.clone(), change.callee_view.clone()),
+                change.kind,
+            );
+        }
         self.changed_roots.sort();
         self.changed_roots.dedup();
         for node in self.nodes.values_mut() {
@@ -199,12 +180,33 @@ impl<'a> App<'a> {
             edges: self.edges.keys().cloned().collect(),
         };
         self.layout = layout::build(&self.impact);
+        for edge in &mut self.layout.edges {
+            edge.status = self
+                .session
+                .edge_comparison
+                .changes
+                .iter()
+                .find(|change| {
+                    change.caller_view == edge.caller && change.callee_view == edge.callee
+                })
+                .map(|change| change.kind);
+        }
         if !self
             .selected_node
             .as_ref()
             .is_some_and(|id| self.layout.order.contains(id))
         {
-            self.selected_node = self.changed_roots.first().cloned();
+            self.selected_node = self.changed_roots.first().cloned().or_else(|| {
+                self.session
+                    .edge_comparison
+                    .changes
+                    .first()
+                    .and_then(|change| {
+                        [change.callee_view.clone(), change.caller_view.clone()]
+                            .into_iter()
+                            .find(|id| self.layout.order.contains(id))
+                    })
+            });
         }
         self.relayout();
     }
@@ -243,6 +245,30 @@ impl<'a> App<'a> {
                     location
                 });
             }
+            component.edge_labels = self
+                .edge_status
+                .iter()
+                .filter(|((caller, callee), _)| {
+                    component.members.contains(caller) && component.members.contains(callee)
+                })
+                .map(|((caller, callee), status)| {
+                    node_text(&format!(
+                        "{} {} -> {} [{}]",
+                        if *status == EdgeChangeKind::Added {
+                            "+"
+                        } else {
+                            "-"
+                        },
+                        self.node_title(caller),
+                        self.node_title(callee),
+                        if *status == EdgeChangeKind::Added {
+                            "target"
+                        } else {
+                            "base"
+                        }
+                    ))
+                })
+                .collect();
             if self.expanded
                 && self
                     .selected_node
@@ -267,6 +293,44 @@ impl<'a> App<'a> {
         let mut lines = Vec::new();
         for change in &provenance.changes {
             lines.push(format!("Change: {}", kind(*change)));
+        }
+        for change in &self.session.edge_comparison.changes {
+            if change.caller_view != id && change.callee_view != id {
+                continue;
+            }
+            let (role, pair) = if let Some(pair) = &change.before {
+                (SnapshotRole::Base, pair)
+            } else if let Some(pair) = &change.after {
+                (SnapshotRole::Target, pair)
+            } else {
+                continue;
+            };
+            let evidence = self
+                .graph(role)
+                .calls
+                .iter()
+                .find(|call| call.caller == pair.0 && call.target.as_deref() == Some(&pair.1));
+            let where_at = evidence
+                .map(|call| {
+                    format!(
+                        " @ {}:{}",
+                        display_path(&call.source.path),
+                        call.source.range.start.line
+                    )
+                })
+                .unwrap_or_default();
+            lines.push(format!(
+                "Edge {} [{}]: {} -> {}{}",
+                if change.kind == EdgeChangeKind::Added {
+                    "added"
+                } else {
+                    "deleted"
+                },
+                role_name(role),
+                self.node_title(&change.caller_view),
+                self.node_title(&change.callee_view),
+                where_at
+            ));
         }
         for (role, native) in [
             (SnapshotRole::Base, &provenance.base),

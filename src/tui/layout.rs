@@ -1,4 +1,4 @@
-use crate::graph::Impact;
+use crate::graph::{EdgeChangeKind, Impact};
 use petgraph::algo::kosaraju_scc;
 use petgraph::stable_graph::StableDiGraph;
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,13 +19,24 @@ pub struct Component {
     pub title: String,
     pub description: String,
     pub extra: Vec<String>,
+    pub edge_labels: Vec<String>,
     pub cycle: bool,
+}
+
+#[derive(Debug)]
+pub struct LayoutEdge {
+    pub from: usize,
+    pub to: usize,
+    pub caller: String,
+    pub callee: String,
+    pub port: usize,
+    pub status: Option<EdgeChangeKind>,
 }
 
 #[derive(Debug, Default)]
 pub struct Layout {
     pub components: Vec<Component>,
-    pub edges: Vec<(usize, usize)>,
+    pub edges: Vec<LayoutEdge>,
     pub order: Vec<String>,
     pub width: i32,
     pub height: i32,
@@ -142,6 +153,7 @@ pub fn build(impact: &Impact) -> Layout {
             title: String::new(),
             description: String::new(),
             extra: Vec::new(),
+            edge_labels: Vec::new(),
             cycle,
         });
     }
@@ -151,9 +163,31 @@ pub fn build(impact: &Impact) -> Layout {
         .into_iter()
         .flat_map(|id| components[id].members.iter().cloned())
         .collect();
+    let mut routes: Vec<_> = impact
+        .edges
+        .iter()
+        .filter_map(|(caller, callee)| {
+            let from = member_group[caller];
+            let to = member_group[callee];
+            (from != to).then(|| LayoutEdge {
+                from,
+                to,
+                caller: caller.clone(),
+                callee: callee.clone(),
+                port: 0,
+                status: None,
+            })
+        })
+        .collect();
+    routes.sort_by(|a, b| (a.to, &a.caller, &a.callee).cmp(&(b.to, &b.caller, &b.callee)));
+    let mut incoming = vec![0; components.len()];
+    for route in &mut routes {
+        route.port = incoming[route.to];
+        incoming[route.to] += 1;
+    }
     Layout {
         components,
-        edges: edges.into_iter().collect(),
+        edges: routes,
         order,
         width: 0,
         height: 0,
@@ -170,21 +204,35 @@ pub fn place(view: &mut Layout) {
         let columns = &mut widths[component.cluster];
         columns.resize(columns.len().max(component.column + 1), MIN_BOX_WIDTH);
     }
-    for component in &mut view.components {
-        component.width = (component
-            .extra
-            .iter()
-            .map(String::len)
-            .chain([component.title.len(), component.description.len()])
-            .max()
-            .unwrap_or(0) as i32
-            + 2)
-        .max(MIN_BOX_WIDTH);
-        component.height = 5 + if component.extra.is_empty() {
-            0
-        } else {
-            component.extra.len() as i32 + 1
-        };
+    for (id, component) in view.components.iter_mut().enumerate() {
+        let incoming = view.edges.iter().filter(|edge| edge.to == id).count() as i32;
+        component.width = (component.title.len() as i32 + 3)
+            .max(component.description.len() as i32 + 2)
+            .max(
+                component
+                    .extra
+                    .iter()
+                    .map(|line| line.len() as i32 + 2)
+                    .max()
+                    .unwrap_or(0),
+            )
+            .max(
+                component
+                    .edge_labels
+                    .iter()
+                    .map(|line| line.len() as i32 + 2)
+                    .max()
+                    .unwrap_or(0),
+            )
+            .max(MIN_BOX_WIDTH);
+        component.height = (5
+            + component.edge_labels.len() as i32
+            + if component.extra.is_empty() {
+                0
+            } else {
+                component.extra.len() as i32 + 1
+            })
+        .max(incoming + 2);
         widths[component.cluster][component.column] =
             widths[component.cluster][component.column].max(component.width);
     }

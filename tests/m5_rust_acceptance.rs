@@ -48,7 +48,7 @@ fn report(output: &Output, exit: i32) -> Value {
     );
     assert!(output.stderr.is_empty());
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["schema_version"], 2);
     assert_eq!(value["complete"], exit == 0);
     integrity_refs(&value);
     value
@@ -83,6 +83,21 @@ fn integrity_refs(value: &Value) {
         assert!(nodes.contains(e["callee"].as_str().unwrap()));
         for id in e["call_sites"].as_array().unwrap() {
             assert!(sites.contains(id.as_str().unwrap()));
+        }
+    }
+    for change in value["edge_changes"].as_array().unwrap() {
+        for (field, snapshot) in [("before", "base"), ("after", "target")] {
+            if let Some(pair) = change[field].as_object() {
+                assert!(
+                    value["edges"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|edge| edge["snapshot"] == snapshot
+                            && edge["caller"] == pair["caller"]
+                            && edge["callee"] == pair["callee"])
+                );
+            }
         }
     }
     for change in value["symbol_changes"].as_array().unwrap() {

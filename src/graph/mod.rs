@@ -1,4 +1,6 @@
-use crate::analysis::{ExtractedSnapshot, ParsedFile, ScopeKind, SourceRef, SourceUnitKey, Symbol};
+use crate::analysis::{
+    ExtractedSnapshot, LanguageId, ParsedFile, ScopeKind, SourceRef, SourceUnitKey, Symbol,
+};
 use crate::git::SnapshotRole;
 use crate::languages::{Resolution, ResolverRegistry, UnresolvedReason};
 use petgraph::Direction::Incoming;
@@ -35,6 +37,35 @@ pub struct Impact {
     pub root: String,
     pub nodes: Vec<(String, usize)>,
     pub edges: Vec<(String, String)>,
+}
+pub type SymbolKey = (SourceUnitKey, LanguageId, String, String);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EndpointIdentity {
+    Symbol(SymbolKey),
+    Ambiguous(SymbolKey, SnapshotRole, String),
+    Module(SourceUnitKey),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EdgeChangeKind {
+    Added,
+    Deleted,
+}
+
+#[derive(Debug, Clone)]
+pub struct EdgeChange {
+    pub kind: EdgeChangeKind,
+    pub caller_view: String,
+    pub callee_view: String,
+    pub before: Option<(String, String)>,
+    pub after: Option<(String, String)>,
+}
+
+#[derive(Debug)]
+pub struct EdgeComparison {
+    pub native_to_view: BTreeMap<String, String>,
+    pub changes: Vec<EdgeChange>,
 }
 fn role_code(role: SnapshotRole) -> &'static str {
     match role {
@@ -198,4 +229,163 @@ pub fn callers(graph: &SnapshotGraph, root: &str, depth: usize) -> Impact {
         nodes,
         edges,
     }
+}
+
+pub fn compare_edges(
+    base: &SnapshotGraph,
+    target: &SnapshotGraph,
+    base_source: &ExtractedSnapshot,
+    target_source: &ExtractedSnapshot,
+) -> EdgeComparison {
+    let mut groups: BTreeMap<SymbolKey, (Vec<String>, Vec<String>)> = BTreeMap::new();
+    let mut keys = BTreeMap::new();
+    for graph in [base, target] {
+        for node in graph.graph.node_weights() {
+            if let Some(symbol) = &node.symbol {
+                let key = (
+                    symbol.unit.clone(),
+                    symbol.language,
+                    symbol.qualified_name.clone(),
+                    symbol.name.clone(),
+                );
+                let group = groups.entry(key).or_default();
+                match graph.role {
+                    SnapshotRole::Base => group.0.push(node.id.clone()),
+                    SnapshotRole::Target => group.1.push(node.id.clone()),
+                }
+            }
+        }
+        for (unit, id) in &graph.module_ids {
+            keys.insert(id.clone(), EndpointIdentity::Module(unit.clone()));
+        }
+    }
+    for (key, (before, after)) in groups {
+        let ambiguous = before.len() > 1 || after.len() > 1;
+        for (role, ids) in [(SnapshotRole::Base, before), (SnapshotRole::Target, after)] {
+            for id in ids {
+                keys.insert(
+                    id.clone(),
+                    if ambiguous {
+                        EndpointIdentity::Ambiguous(key.clone(), role, id)
+                    } else {
+                        EndpointIdentity::Symbol(key.clone())
+                    },
+                );
+            }
+        }
+    }
+    let identities: BTreeSet<_> = keys.values().collect();
+    let view_ids: BTreeMap<_, _> = identities
+        .into_iter()
+        .enumerate()
+        .map(|(index, key)| (key, format!("v-{index:06}")))
+        .collect();
+    let native_to_view: BTreeMap<_, _> = keys
+        .iter()
+        .map(|(id, key)| (id.clone(), view_ids[key].clone()))
+        .collect();
+    let invalid: BTreeSet<_> = base_source
+        .files
+        .iter()
+        .chain(&target_source.files)
+        .filter(|(_, file)| !file.valid)
+        .map(|(unit, _)| unit.clone())
+        .collect();
+    let pairs = |graph: &SnapshotGraph| {
+        let mut pairs = BTreeMap::new();
+        for edge in graph.graph.edge_references() {
+            let caller = &graph.graph[edge.source()];
+            let callee = &graph.graph[edge.target()];
+            let eligible = |node: &GraphNode| match &keys[&node.id] {
+                EndpointIdentity::Symbol((unit, ..)) | EndpointIdentity::Module(unit) => {
+                    !invalid.contains(unit)
+                }
+                EndpointIdentity::Ambiguous(..) => false,
+            };
+            if eligible(caller) && eligible(callee) {
+                pairs.insert(
+                    (
+                        native_to_view[&caller.id].clone(),
+                        native_to_view[&callee.id].clone(),
+                    ),
+                    (caller.id.clone(), callee.id.clone()),
+                );
+            }
+        }
+        pairs
+    };
+    let before = pairs(base);
+    let after = pairs(target);
+    let mut changes = Vec::new();
+    for ((caller_view, callee_view), pair) in &before {
+        if !after.contains_key(&(caller_view.clone(), callee_view.clone())) {
+            changes.push(EdgeChange {
+                kind: EdgeChangeKind::Deleted,
+                caller_view: caller_view.clone(),
+                callee_view: callee_view.clone(),
+                before: Some(pair.clone()),
+                after: None,
+            });
+        }
+    }
+    for ((caller_view, callee_view), pair) in &after {
+        if !before.contains_key(&(caller_view.clone(), callee_view.clone())) {
+            changes.push(EdgeChange {
+                kind: EdgeChangeKind::Added,
+                caller_view: caller_view.clone(),
+                callee_view: callee_view.clone(),
+                before: None,
+                after: Some(pair.clone()),
+            });
+        }
+    }
+    changes.sort_by(|a, b| {
+        (&a.caller_view, &a.callee_view, a.kind).cmp(&(&b.caller_view, &b.callee_view, b.kind))
+    });
+    EdgeComparison {
+        native_to_view,
+        changes,
+    }
+}
+
+pub fn call_retargets_covered(
+    base: &SnapshotGraph,
+    target: &SnapshotGraph,
+    before_id: &str,
+    after_id: &str,
+    comparison: &EdgeComparison,
+) -> bool {
+    let before = base.calls.iter().filter(|call| call.caller == before_id);
+    let after = target.calls.iter().filter(|call| call.caller == after_id);
+    if before.clone().count() != after.clone().count() {
+        return false;
+    }
+    let mut differing = false;
+    let caller_view = &comparison.native_to_view[before_id];
+    for (old, new) in before.zip(after) {
+        if old.expression == new.expression {
+            continue;
+        }
+        differing = true;
+        let (Some(old_target), Some(new_target)) = (&old.target, &new.target) else {
+            return false;
+        };
+        let old_view = &comparison.native_to_view[old_target];
+        let new_view = &comparison.native_to_view[new_target];
+        if old_view == new_view
+            || !comparison.changes.iter().any(|change| {
+                change.kind == EdgeChangeKind::Deleted
+                    && &change.caller_view == caller_view
+                    && &change.callee_view == old_view
+            })
+            || !comparison.changes.iter().any(|change| {
+                change.kind == EdgeChangeKind::Added
+                    && &change.caller_view == caller_view
+                    && &change.callee_view == new_view
+            })
+        {
+            return false;
+        }
+    }
+    differing
 }

@@ -12,14 +12,31 @@ pub struct AnalysisSession {
     pub changes: ChangeAnalysis,
     pub base_graph: SnapshotGraph,
     pub target_graph: SnapshotGraph,
+    pub edge_comparison: graph::EdgeComparison,
 }
 impl AnalysisSession {
     pub fn new(capture: CaptureResult) -> Self {
         let base = analysis::extract_snapshot(&capture.pair.base);
         let target = analysis::extract_snapshot(&capture.pair.target);
-        let changes = analysis::classify_symbols(&base, &target);
+        let mut changes = analysis::classify_symbols(&base, &target);
         let base_graph = graph::build(&base);
         let target_graph = graph::build(&target);
+        let edge_comparison = graph::compare_edges(&base_graph, &target_graph, &base, &target);
+        changes.changes.retain(|change| {
+            let (Some(before), Some(after)) = (&change.before, &change.after) else {
+                return true;
+            };
+            if change.kind != SymbolChangeKind::Modified
+                || before.direct_fingerprint == after.direct_fingerprint
+                || before.non_call_fingerprint != after.non_call_fingerprint
+            {
+                return true;
+            }
+            let before_id = base_graph.symbol_ids.get(&(before.unit.clone(), before.scope_id));
+            let after_id = target_graph.symbol_ids.get(&(after.unit.clone(), after.scope_id));
+            !matches!((before_id, after_id), (Some(b), Some(a))
+                if graph::call_retargets_covered(&base_graph, &target_graph, b, a, &edge_comparison))
+        });
         Self {
             capture,
             base,
@@ -27,6 +44,7 @@ impl AnalysisSession {
             changes,
             base_graph,
             target_graph,
+            edge_comparison,
         }
     }
     pub fn complete(&self) -> bool {
@@ -88,6 +106,12 @@ impl AnalysisSession {
         let call_sites: Vec<_> = [&self.base_graph,&self.target_graph].into_iter().flat_map(|g| g.calls.iter().map(|c|json!({"id":c.id,"caller":c.caller,"target":c.target,"unresolved_reason":c.reason.map(|r|snake(&format!("{:?}",r))),"expression":c.expression,"snapshot":role(c.source.snapshot),"path":path(&c.source.path),"range":range(c.source.range)})).collect::<Vec<_>>()).collect();
         let mut edges: Vec<_> = [&self.base_graph,&self.target_graph].into_iter().flat_map(|g|g.graph.edge_references().map(|e|json!({"caller":g.graph[e.source()].id,"callee":g.graph[e.target()].id,"snapshot":role(g.role),"call_sites":e.weight()})).collect::<Vec<_>>()).collect();
         edges.sort_by_key(|edge| serde_json::to_string(edge).unwrap_or_default());
+        let edge_changes: Vec<_> = self.edge_comparison.changes.iter().map(|change| {
+            let pair = |ids: &Option<(String, String)>| ids.as_ref()
+                .map(|(caller, callee)| json!({"caller":caller,"callee":callee}));
+            json!({"kind":match change.kind { graph::EdgeChangeKind::Added => "added", graph::EdgeChangeKind::Deleted => "deleted" },
+                "before":pair(&change.before),"after":pair(&change.after)})
+        }).collect();
         let mut diagnostics: Vec<Value> = self.capture.diagnostics.iter().map(|d|json!({"category":"git","message":d.message,"path":path(&d.path),"snapshot":null,"range":null,"affects_completeness":true})).collect();
         diagnostics.extend(self.base.diagnostics.iter().chain(&self.target.diagnostics).map(|d| {
             let rust_layout = matches!(d.kind, analysis::DiagnosticKind::UnsupportedLayout | analysis::DiagnosticKind::ModuleAmbiguity)
@@ -96,7 +120,7 @@ impl AnalysisSession {
         }));
         diagnostics.extend(self.changes.diagnostics.iter().map(|d| json!({"category":snake(&format!("{:?}",d.kind)),"message":d.message,"path":path(&d.path),"snapshot":role(d.snapshot),"range":d.range.map(range),"affects_completeness":false})));
         diagnostics.sort_by_key(|d| serde_json::to_string(d).unwrap_or_default());
-        json!({"schema_version":1,"tool_version":env!("CARGO_PKG_VERSION"),"comparison":comparison,"snapshots":{"base":snapshot(&self.capture.pair.base),"target":snapshot(&self.capture.pair.target)},"file_changes":file_changes,"symbols":symbols,"module_contexts":module_contexts,"symbol_changes":symbol_changes,"call_sites":call_sites,"edges":edges,"impacts":impacts,"diagnostics":diagnostics,"complete":self.complete()})
+        json!({"schema_version":2,"tool_version":env!("CARGO_PKG_VERSION"),"comparison":comparison,"snapshots":{"base":snapshot(&self.capture.pair.base),"target":snapshot(&self.capture.pair.target)},"file_changes":file_changes,"symbols":symbols,"module_contexts":module_contexts,"symbol_changes":symbol_changes,"edge_changes":edge_changes,"call_sites":call_sites,"edges":edges,"impacts":impacts,"diagnostics":diagnostics,"complete":self.complete()})
     }
 }
 fn snake(input: &str) -> String {
@@ -180,6 +204,82 @@ mod tests {
                 depth: 2,
             },
         })
+    }
+    #[test]
+    fn certain_python_retarget_is_edge_only_but_arguments_are_nodes() {
+        let base = b"def B(x): return x\ndef C(x): return x\ndef A(x): return B(x)\n";
+        let retarget = b"def B(x): return x\ndef C(x): return x\ndef A(x): return C(x)\n";
+        let report = session(&[(b"a.py", base)], &[(b"a.py", retarget)]).report(&mode(), 2);
+        assert!(report["symbol_changes"].as_array().unwrap().is_empty());
+        assert_eq!(report["edge_changes"].as_array().unwrap().len(), 2);
+        for edge in report["edge_changes"].as_array().unwrap() {
+            let (field, snapshot) = if edge["kind"] == "added" {
+                ("after", "target")
+            } else {
+                ("before", "base")
+            };
+            let pair = &edge[field];
+            assert!(
+                report["edges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|e| e["snapshot"] == snapshot
+                        && e["caller"] == pair["caller"]
+                        && e["callee"] == pair["callee"])
+            );
+        }
+        let argument = session(
+            &[(b"a.py", b"def B(x): return x\ndef A(): return B(1)\n")],
+            &[(b"a.py", b"def B(x): return x\ndef A(): return B(2)\n")],
+        )
+        .report(&mode(), 2);
+        assert_eq!(argument["symbol_changes"][0]["kind"], "modified");
+        assert!(argument["edge_changes"].as_array().unwrap().is_empty());
+    }
+    #[test]
+    fn import_retarget_and_repeated_sites_compare_pairs() {
+        let b = b"def B(): pass\n";
+        let c = b"def C(): pass\n";
+        let old = [
+            (
+                b"a.py".as_slice(),
+                b"from b import B as target\ndef A(): return target()\n".as_slice(),
+            ),
+            (b"b.py", b.as_slice()),
+            (b"c.py", c.as_slice()),
+        ];
+        let new = [
+            (
+                b"a.py".as_slice(),
+                b"from c import C as target\ndef A(): return target()\n".as_slice(),
+            ),
+            (b"b.py", b.as_slice()),
+            (b"c.py", c.as_slice()),
+        ];
+        let report = session(&old, &new).report(&mode(), 2);
+        assert_eq!(report["edge_changes"].as_array().unwrap().len(), 2);
+        assert!(report["symbol_changes"].as_array().unwrap().is_empty());
+        let report = session(
+            &[(b"a.py", b"def B(): pass\ndef A(): B(); B()\n")],
+            &[(b"a.py", b"def B(): pass\ndef A(): B()\n")],
+        )
+        .report(&mode(), 2);
+        assert!(report["edge_changes"].as_array().unwrap().is_empty());
+        assert_eq!(report["symbol_changes"][0]["kind"], "modified");
+    }
+    #[test]
+    fn unresolved_or_unchanged_pair_keeps_node_edit() {
+        let old = b"def B(): pass\ndef C(): pass\ndef A(): B(); unknown()\n";
+        let new = b"def B(): pass\ndef C(): pass\ndef A(): C(); missing()\n";
+        let report = session(&[(b"a.py", old)], &[(b"a.py", new)]).report(&mode(), 2);
+        assert_eq!(report["symbol_changes"][0]["kind"], "modified");
+        assert_eq!(report["edge_changes"].as_array().unwrap().len(), 2);
+        let old = b"def B(): pass\ndef C(): pass\ndef A(): B(); B()\n";
+        let new = b"def B(): pass\ndef C(): pass\ndef A(): C(); B()\n";
+        let report = session(&[(b"a.py", old)], &[(b"a.py", new)]).report(&mode(), 2);
+        assert_eq!(report["symbol_changes"][0]["kind"], "modified");
+        assert_eq!(report["edge_changes"].as_array().unwrap().len(), 1);
     }
     #[test]
     fn modified_root_finds_callers_in_unchanged_files() {
@@ -497,6 +597,17 @@ mod tests {
                 assert!(sites.contains(site.as_str().unwrap()));
             }
         }
+        for change in report["edge_changes"].as_array().unwrap() {
+            for (field, snapshot) in [("before", "base"), ("after", "target")] {
+                if let Some(pair) = change[field].as_object() {
+                    assert!(report["edges"].as_array().unwrap().iter().any(
+                        |edge| edge["snapshot"] == snapshot
+                            && edge["caller"] == pair["caller"]
+                            && edge["callee"] == pair["callee"]
+                    ));
+                }
+            }
+        }
         assert_eq!(report["module_contexts"].as_array().unwrap().len(), 1);
     }
     #[test]
@@ -559,5 +670,69 @@ mod tests {
                 .any(|c| c["expression"] == "f" && c["unresolved_reason"] == "wildcard_import")
         );
         assert!(report["edges"].as_array().unwrap().is_empty());
+    }
+    #[test]
+    fn rust_retarget_is_edge_only_and_doc_edit_preserves_node_change() {
+        let manifest = b"[package]\nname = \"example\"\nversion = \"0.1.0\"\n";
+        let old = b"fn b() -> i32 { 1 }\nfn c() -> i32 { 2 }\nfn a() -> i32 { b() }\n";
+        let new = b"fn b() -> i32 { 1 }\nfn c() -> i32 { 2 }\nfn a() -> i32 { c() }\n";
+        let base = [
+            (b"Cargo.toml".as_slice(), manifest.as_slice()),
+            (b"src/lib.rs", old.as_slice()),
+        ];
+        let target = [
+            (b"Cargo.toml".as_slice(), manifest.as_slice()),
+            (b"src/lib.rs", new.as_slice()),
+        ];
+        let report = session(&base, &target).report(&mode(), 2);
+        assert!(report["symbol_changes"].as_array().unwrap().is_empty());
+        assert_eq!(report["edge_changes"].as_array().unwrap().len(), 2);
+        let documented =
+            b"fn b() -> i32 { 1 }\nfn c() -> i32 { 2 }\n/// changed\nfn a() -> i32 { c() }\n";
+        let target = [
+            (b"Cargo.toml".as_slice(), manifest.as_slice()),
+            (b"src/lib.rs", documented.as_slice()),
+        ];
+        let report = session(&base, &target).report(&mode(), 2);
+        assert_eq!(report["symbol_changes"][0]["kind"], "modified");
+        assert_eq!(report["edge_changes"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn invalid_and_ambiguous_endpoints_do_not_create_false_deltas() {
+        let old = b"def B(): pass\ndef A(): B()\n";
+        let invalid = session(&[(b"a.py", old)], &[(b"a.py", b"def B(:\n")]).report(&mode(), 1);
+        assert_eq!(invalid["complete"], false);
+        assert!(invalid["edge_changes"].as_array().unwrap().is_empty());
+        let duplicate = b"def B(): pass\ndef A(): B()\ndef A(): B()\n";
+        let report = session(&[(b"a.py", duplicate)], &[(b"a.py", old)]).report(&mode(), 1);
+        assert!(report["edge_changes"].as_array().unwrap().is_empty());
+    }
+    #[test]
+    fn changed_callee_impact_uses_current_callers_only() {
+        let base = b"def B(): return 1\ndef A(): return B()\n";
+        let target = b"def B(): return 2\ndef A(): return 0\n";
+        let report = session(&[(b"a.py", base)], &[(b"a.py", target)]).report(&mode(), 2);
+        assert_eq!(report["symbol_changes"].as_array().unwrap().len(), 2);
+        assert_eq!(report["edge_changes"].as_array().unwrap().len(), 1);
+        let b = report["symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == "B" && s["snapshot"] == "target")
+            .unwrap()["id"]
+            .clone();
+        let impact = report["impacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["root"] == b)
+            .unwrap();
+        assert_eq!(impact["nodes"].as_array().unwrap().len(), 1);
+        let base = b"def B(): return 1\ndef A(): return B()\ndef C(): return B()\n";
+        let target = b"def B(): return 2\ndef A(): return B()\ndef C(): return B()\n";
+        let report = session(&[(b"a.py", base)], &[(b"a.py", target)]).report(&mode(), 2);
+        assert!(report["edge_changes"].as_array().unwrap().is_empty());
+        assert_eq!(report["impacts"][0]["nodes"].as_array().unwrap().len(), 3);
     }
 }

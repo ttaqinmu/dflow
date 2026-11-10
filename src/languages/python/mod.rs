@@ -1,8 +1,8 @@
 pub mod resolve;
 use crate::analysis::{
     Binding, BindingKind, CallTarget, Diagnostic, DiagnosticKind, DiscoveredUnit, Discovery,
-    ExtractedCallSite, ImportBinding, LanguageId, ParsedFile, Position, Scope, ScopeKind,
-    SourceRange, SourceRef, SourceUnitKey, Symbol, SymbolKind, fingerprint,
+    ExtractedCallSite, FingerprintBuilder, ImportBinding, LanguageId, ParsedFile, Position, Scope,
+    ScopeKind, SourceRange, SourceRef, SourceUnitKey, Symbol, SymbolKind,
 };
 use crate::git::{CapturedFile, CapturedSnapshot, SnapshotRole};
 use crate::languages::LanguageAdapter;
@@ -136,21 +136,55 @@ impl Walker<'_> {
         let mut cursor = node.walk();
         node.children(&mut cursor).collect()
     }
-    fn canonical(&self, node: Node<'_>, parts: &mut Vec<Vec<u8>>) {
+    fn canonical(
+        &self,
+        node: Node<'_>,
+        digest: &mut FingerprintBuilder,
+        mode: u8,
+        body: Option<usize>,
+        in_body: bool,
+    ) {
         if node.kind() == "comment" {
             return;
         }
-        let children = self.all_children(node);
-        if children.is_empty() {
-            let token = &self.bytes[node.byte_range()];
-            if !token.iter().all(u8::is_ascii_whitespace) {
-                parts.push(node.kind().as_bytes().to_vec());
-                parts.push(token.to_vec());
+        let in_body = in_body || body == Some(node.id());
+        if mode != 0 && in_body {
+            let nested = if node.kind() == "decorated_definition" {
+                node.child_by_field_name("definition")
+            } else {
+                Some(node)
+            };
+            if let Some(def) = nested.filter(|n| n.kind() == "function_definition") {
+                digest.push(b"nested_function");
+                digest.push(def.kind().as_bytes());
+                if let Some(name) = def.child_by_field_name("name") {
+                    digest.push(&self.bytes[name.byte_range()]);
+                }
+                return;
+            }
+        }
+        let mut cursor = node.walk();
+        let mut children = node.children(&mut cursor);
+        if let Some(first) = children.next() {
+            digest.push(node.kind().as_bytes());
+            for child in std::iter::once(first).chain(children) {
+                if mode == 2
+                    && in_body
+                    && node.kind() == "call"
+                    && node
+                        .child_by_field_name("function")
+                        .is_some_and(|n| n.id() == child.id())
+                {
+                    digest.push(b"callee");
+                } else {
+                    self.canonical(child, digest, mode, body, in_body);
+                }
             }
         } else {
-            parts.push(node.kind().as_bytes().to_vec());
-            for child in children {
-                self.canonical(child, parts);
+            let token = &self.bytes[node.byte_range()];
+            if !token.iter().all(u8::is_ascii_whitespace) {
+                digest.push(node.kind().as_bytes());
+                digest.push(token);
             }
         }
     }
@@ -365,8 +399,13 @@ impl Walker<'_> {
                 (true, false) => SymbolKind::Method,
                 (true, true) => SymbolKind::AsyncMethod,
             };
-            let mut parts = Vec::new();
-            self.canonical(outer, &mut parts);
+            let body = inner.child_by_field_name("body").map(|n| n.id());
+            let mut full = FingerprintBuilder::new();
+            let mut direct = FingerprintBuilder::new();
+            let mut non_call = FingerprintBuilder::new();
+            self.canonical(outer, &mut full, 0, body, false);
+            self.canonical(outer, &mut direct, 1, body, false);
+            self.canonical(outer, &mut non_call, 2, body, false);
             self.parsed.symbols.push(Symbol {
                 unit: self.parsed.unit.clone(),
                 language: LanguageId::Python,
@@ -376,7 +415,9 @@ impl Walker<'_> {
                 name,
                 qualified_name: qualified,
                 kind: symbol_kind,
-                fingerprint: fingerprint(parts),
+                fingerprint: full.finish(),
+                direct_fingerprint: direct.finish(),
+                non_call_fingerprint: non_call.finish(),
                 decorated: outer.id() != inner.id(),
                 conditional: false,
                 unknown_attribute: false,

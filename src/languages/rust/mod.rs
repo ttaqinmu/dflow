@@ -2,9 +2,9 @@ pub mod discover;
 pub mod resolve;
 
 use crate::analysis::{
-    Binding, BindingKind, CallTarget, Diagnostic, DiagnosticKind, ExtractedCallSite, ImportBinding,
-    LanguageId, ParsedFile, Position, Scope, ScopeKind, SourceRange, SourceRef, Symbol, SymbolKind,
-    fingerprint,
+    Binding, BindingKind, CallTarget, Diagnostic, DiagnosticKind, ExtractedCallSite,
+    FingerprintBuilder, ImportBinding, LanguageId, ParsedFile, Position, Scope, ScopeKind,
+    SourceRange, SourceRef, Symbol, SymbolKind,
 };
 use crate::git::{CapturedFile, CapturedSnapshot, SnapshotRole};
 use crate::languages::{DiscoveredUnit, Discovery, LanguageAdapter};
@@ -72,27 +72,56 @@ impl Walker<'_> {
         matches!(node.kind(), "line_comment" | "block_comment")
             && node.child_by_field_name("doc").is_some()
     }
-    fn canonical(&self, node: Node<'_>, parts: &mut Vec<Vec<u8>>) {
+    fn canonical(
+        &self,
+        node: Node<'_>,
+        digest: &mut FingerprintBuilder,
+        mode: u8,
+        body: Option<usize>,
+        in_body: bool,
+    ) {
         if matches!(node.kind(), "line_comment" | "block_comment") && !self.is_doc(node) {
             return;
         }
-        // A doc comment's children split marker and content. Keep its exact bytes as one token.
-        if self.is_doc(node) {
-            parts.push(node.kind().as_bytes().to_vec());
-            parts.push(self.bytes[node.byte_range()].to_vec());
+        let in_body = in_body || body == Some(node.id());
+        if mode != 0
+            && in_body
+            && matches!(node.kind(), "function_item" | "function_signature_item")
+        {
+            digest.push(b"nested_function");
+            digest.push(node.kind().as_bytes());
+            if let Some(name) = node.child_by_field_name("name") {
+                digest.push(&self.bytes[name.byte_range()]);
+            }
             return;
         }
-        let children = self.children(node);
-        if children.is_empty() {
-            let token = &self.bytes[node.byte_range()];
-            if !token.iter().all(u8::is_ascii_whitespace) {
-                parts.push(node.kind().as_bytes().to_vec());
-                parts.push(token.to_vec());
+        if self.is_doc(node) {
+            digest.push(node.kind().as_bytes());
+            digest.push(&self.bytes[node.byte_range()]);
+            return;
+        }
+        let mut cursor = node.walk();
+        let mut children = node.children(&mut cursor);
+        if let Some(first) = children.next() {
+            digest.push(node.kind().as_bytes());
+            for child in std::iter::once(first).chain(children) {
+                if mode == 2
+                    && in_body
+                    && node.kind() == "call_expression"
+                    && node
+                        .child_by_field_name("function")
+                        .is_some_and(|n| n.id() == child.id())
+                {
+                    digest.push(b"callee");
+                } else {
+                    self.canonical(child, digest, mode, body, in_body);
+                }
             }
         } else {
-            parts.push(node.kind().as_bytes().to_vec());
-            for child in children {
-                self.canonical(child, parts);
+            let token = &self.bytes[node.byte_range()];
+            if !token.iter().all(u8::is_ascii_whitespace) {
+                digest.push(node.kind().as_bytes());
+                digest.push(token);
             }
         }
     }
@@ -209,11 +238,18 @@ impl Walker<'_> {
             (false, true) => SymbolKind::AsyncFunction,
             (false, false) => SymbolKind::Function,
         };
-        let mut parts = Vec::new();
+        let body = node.child_by_field_name("body").map(|n| n.id());
+        let mut full = FingerprintBuilder::new();
+        let mut direct = FingerprintBuilder::new();
+        let mut non_call = FingerprintBuilder::new();
         for attr in attrs {
-            self.canonical(*attr, &mut parts);
+            self.canonical(*attr, &mut full, 0, body, false);
+            self.canonical(*attr, &mut direct, 1, body, false);
+            self.canonical(*attr, &mut non_call, 2, body, false);
         }
-        self.canonical(node, &mut parts);
+        self.canonical(node, &mut full, 0, body, false);
+        self.canonical(node, &mut direct, 1, body, false);
+        self.canonical(node, &mut non_call, 2, body, false);
         let availability = inherited.combine(self.availability(attrs));
         self.parsed.symbols.push(Symbol {
             unit: self.parsed.unit.clone(),
@@ -224,7 +260,9 @@ impl Walker<'_> {
             name: name.clone(),
             qualified_name: self.parsed.scopes[scope].qualified_name.clone(),
             kind,
-            fingerprint: fingerprint(parts),
+            fingerprint: full.finish(),
+            direct_fingerprint: direct.finish(),
+            non_call_fingerprint: non_call.finish(),
             decorated: false,
             conditional: availability.conditional,
             unknown_attribute: availability.unknown_attribute,
@@ -892,5 +930,31 @@ mod tests {
         assert_ne!(a.symbols[0].fingerprint, c.symbols[0].fingerprint);
         assert_ne!(a.symbols[0].fingerprint, d.symbols[0].fingerprint);
         assert!(!a.symbols[0].unknown_attribute);
+    }
+    #[test]
+    fn direct_and_non_call_fingerprints_separate_rust_edits() {
+        let symbol = |source| extract(source, None).symbols[0].clone();
+        let original = symbol("/// docs\nfn f(x: i32) -> i32 { fn inner() -> i32 { 1 } B(x) }");
+        let nested = symbol("/// docs\nfn f(x: i32) -> i32 { fn inner() -> i32 { 2 } B(x) }");
+        assert_eq!(original.direct_fingerprint, nested.direct_fingerprint);
+        let retarget = symbol("/// docs\nfn f(x: i32) -> i32 { fn inner() -> i32 { 1 } C(x) }");
+        assert_ne!(original.direct_fingerprint, retarget.direct_fingerprint);
+        assert_eq!(original.non_call_fingerprint, retarget.non_call_fingerprint);
+        for changed in [
+            "/// new\nfn f(x: i32) -> i32 { fn inner() -> i32 { 1 } B(x) }",
+            "/// docs\nfn f(x: u32) -> i32 { fn inner() -> i32 { 1 } B(x) }",
+            "/// docs\nfn f(x: i32) -> i32 { fn inner() -> i32 { 1 } B(2) }",
+            "/// docs\nfn f(x: i32) -> i32 { fn inner() -> i32 { 1 } return B(x); }",
+        ] {
+            assert_ne!(
+                original.non_call_fingerprint,
+                symbol(changed).non_call_fingerprint
+            );
+        }
+        assert_eq!(
+            original.direct_fingerprint,
+            symbol("/// docs\nfn f( x : i32 )->i32{/* ordinary */fn inner()->i32{1}B(x)}")
+                .direct_fingerprint
+        );
     }
 }

@@ -52,7 +52,7 @@ fn all_local_selections_emit_json_without_mutating_index() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(report["comparison"]["selection"], selection);
-        assert_eq!(report["schema_version"], 1);
+        assert_eq!(report["schema_version"], 2);
         assert_eq!(report["symbol_changes"][0]["kind"], "modified");
         assert_eq!(output.stdout.iter().filter(|b| **b == b'\n').count(), 1);
         assert!(output.stderr.is_empty());

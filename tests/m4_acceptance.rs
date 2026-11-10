@@ -50,7 +50,7 @@ fn json(output: &Output, expected_exit: i32) -> Value {
     );
     assert!(output.stderr.is_empty());
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["schema_version"], 2);
     report
 }
 fn changes(report: &Value) -> Vec<(String, String)> {

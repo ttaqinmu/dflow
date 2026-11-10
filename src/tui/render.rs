@@ -2,9 +2,10 @@ use super::state::{App, kind, role_name, safe_text};
 use crate::analysis::SymbolChangeKind;
 use crate::cli::CompareMode;
 use crate::git::CapturedSnapshot;
+use crate::graph::EdgeChangeKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use std::collections::BTreeMap;
@@ -63,6 +64,12 @@ fn change_style(change: SymbolChangeKind) -> Style {
         SymbolChangeKind::Modified => Color::Yellow,
     })
 }
+fn edge_style(change: EdgeChangeKind) -> Style {
+    change_style(match change {
+        EdgeChangeKind::Added => SymbolChangeKind::Added,
+        EdgeChangeKind::Deleted => SymbolChangeKind::Deleted,
+    })
+}
 
 fn put(buf: &mut Buffer, area: Rect, x: i32, y: i32, pan: (i32, i32), symbol: &str, style: Style) {
     let sx = x - pan.0;
@@ -100,8 +107,24 @@ const NORTH: u8 = 1;
 const EAST: u8 = 2;
 const SOUTH: u8 = 4;
 const WEST: u8 = 8;
+const ADDED_ROUTE: u8 = 1;
+const DELETED_ROUTE: u8 = 2;
+const UNCHANGED_ROUTE: u8 = 4;
 
-fn connect(lines: &mut BTreeMap<(i32, i32), u8>, from: (i32, i32), to: (i32, i32)) {
+fn route_style(statuses: u8) -> Style {
+    match statuses {
+        ADDED_ROUTE => edge_style(EdgeChangeKind::Added),
+        DELETED_ROUTE => edge_style(EdgeChangeKind::Deleted),
+        _ => Style::default(),
+    }
+}
+
+fn connect(
+    lines: &mut BTreeMap<(i32, i32), (u8, u8)>,
+    from: (i32, i32),
+    to: (i32, i32),
+    status: u8,
+) {
     let (mut x, mut y) = from;
     while (x, y) != to {
         let (nx, ny, direction, opposite) = if x != to.0 {
@@ -121,8 +144,12 @@ fn connect(lines: &mut BTreeMap<(i32, i32), u8>, from: (i32, i32), to: (i32, i32
                 if step > 0 { NORTH } else { SOUTH },
             )
         };
-        *lines.entry((x, y)).or_default() |= direction;
-        *lines.entry((nx, ny)).or_default() |= opposite;
+        let start = lines.entry((x, y)).or_default();
+        start.0 |= direction;
+        start.1 |= status;
+        let end = lines.entry((nx, ny)).or_default();
+        end.0 |= opposite;
+        end.1 |= status;
         (x, y) = (nx, ny);
     }
 }
@@ -148,20 +175,25 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
     let normal = Style::default();
     let mut lines = BTreeMap::new();
     let mut arrows = Vec::with_capacity(app.layout.edges.len());
-    for (from, to) in &app.layout.edges {
-        let caller = &app.layout.components[*from];
-        let callee = &app.layout.components[*to];
+    for edge in &app.layout.edges {
+        let caller = &app.layout.components[edge.from];
+        let callee = &app.layout.components[edge.to];
         let sx = caller.x + caller.width;
         let sy = caller.y + 1;
         let tx = callee.x - 1;
-        let ty = callee.y + 1;
+        let ty = callee.y + 1 + edge.port as i32;
         let lane = sx + 3;
-        connect(&mut lines, (sx, sy), (lane, sy));
-        connect(&mut lines, (lane, sy), (lane, ty));
-        connect(&mut lines, (lane, ty), (tx - 1, ty));
-        arrows.push((tx, ty));
+        let status = match edge.status {
+            Some(EdgeChangeKind::Added) => ADDED_ROUTE,
+            Some(EdgeChangeKind::Deleted) => DELETED_ROUTE,
+            None => UNCHANGED_ROUTE,
+        };
+        connect(&mut lines, (sx, sy), (lane, sy), status);
+        connect(&mut lines, (lane, sy), (lane, ty), status);
+        connect(&mut lines, (lane, ty), (tx - 1, ty), status);
+        arrows.push((tx, ty, edge.status));
     }
-    for ((x, y), directions) in lines {
+    for ((x, y), (directions, statuses)) in lines {
         put(
             buf,
             area,
@@ -169,11 +201,27 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
             y,
             (app.pan_x, app.pan_y),
             line_glyph(directions),
-            normal,
+            route_style(statuses),
         );
     }
-    for (x, y) in arrows {
-        put(buf, area, x, y, (app.pan_x, app.pan_y), "→", normal);
+    for (x, y, status) in arrows {
+        let style = status.map(edge_style).unwrap_or(normal);
+        put(buf, area, x, y, (app.pan_x, app.pan_y), "→", style);
+        if let Some(status) = status {
+            put(
+                buf,
+                area,
+                x - 1,
+                y,
+                (app.pan_x, app.pan_y),
+                if status == EdgeChangeKind::Added {
+                    "+"
+                } else {
+                    "-"
+                },
+                style,
+            );
+        }
     }
     for component in &app.layout.components {
         let selected = app
@@ -197,11 +245,7 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
                 .map(change_style)
                 .unwrap_or(normal)
         };
-        let style = if selected {
-            base_style.add_modifier(Modifier::BOLD | Modifier::REVERSED)
-        } else {
-            base_style
-        };
+        // Reserve a marker column for every title so selection never shifts the text.
         let right = component.x + component.width - 1;
         let bottom = component.y + component.height - 1;
         let fill_left = (component.x + 1).max(app.pan_x);
@@ -210,7 +254,7 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
         let fill_bottom = bottom.min(app.pan_y + i32::from(area.height));
         for y in fill_top..fill_bottom {
             for x in fill_left..fill_right {
-                put(buf, area, x, y, (app.pan_x, app.pan_y), " ", style);
+                put(buf, area, x, y, (app.pan_x, app.pan_y), " ", base_style);
             }
         }
         for x in component.x..=right {
@@ -228,9 +272,17 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
                 component.y,
                 (app.pan_x, app.pan_y),
                 top,
-                style,
+                base_style,
             );
-            put(buf, area, x, bottom, (app.pan_x, app.pan_y), lower, style);
+            put(
+                buf,
+                area,
+                x,
+                bottom,
+                (app.pan_x, app.pan_y),
+                lower,
+                base_style,
+            );
         }
         for y in component.y + 1..bottom {
             put(
@@ -240,18 +292,29 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
                 y,
                 (app.pan_x, app.pan_y),
                 "│",
-                style,
+                base_style,
             );
-            put(buf, area, right, y, (app.pan_x, app.pan_y), "│", style);
+            put(buf, area, right, y, (app.pan_x, app.pan_y), "│", base_style);
+        }
+        if selected {
+            put(
+                buf,
+                area,
+                component.x + 1,
+                component.y + 1,
+                (app.pan_x, app.pan_y),
+                "*",
+                base_style,
+            );
         }
         put_text(
             buf,
             area,
-            component.x + 1,
+            component.x + 2,
             component.y + 1,
             (app.pan_x, app.pan_y),
             &component.title,
-            style,
+            base_style,
         );
         for x in component.x + 1..right {
             put(
@@ -261,7 +324,7 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
                 component.y + 2,
                 (app.pan_x, app.pan_y),
                 "─",
-                style,
+                base_style,
             );
         }
         put_text(
@@ -271,18 +334,35 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
             component.y + 3,
             (app.pan_x, app.pan_y),
             &component.description,
-            style,
+            base_style,
         );
+        for (row, text) in component.edge_labels.iter().enumerate() {
+            let style = if text.starts_with("+ ") {
+                edge_style(EdgeChangeKind::Added)
+            } else {
+                edge_style(EdgeChangeKind::Deleted)
+            };
+            put_text(
+                buf,
+                area,
+                component.x + 1,
+                component.y + 4 + row as i32,
+                (app.pan_x, app.pan_y),
+                text,
+                style,
+            );
+        }
         if !component.extra.is_empty() {
+            let separator = component.y + 4 + component.edge_labels.len() as i32;
             for x in component.x + 1..right {
                 put(
                     buf,
                     area,
                     x,
-                    component.y + 4,
+                    separator,
                     (app.pan_x, app.pan_y),
                     "─",
-                    style,
+                    base_style,
                 );
             }
             for (row, text) in component.extra.iter().enumerate() {
@@ -290,16 +370,16 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
                     buf,
                     area,
                     component.x + 1,
-                    component.y + 5 + row as i32,
+                    separator + 1 + row as i32,
                     (app.pan_x, app.pan_y),
                     text,
-                    style,
+                    base_style,
                 );
             }
         }
     }
 }
-pub const HEADER_HEIGHT: u16 = 5;
+pub const HEADER_HEIGHT: u16 = 4;
 pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
     let area = frame.area();
     if app.help {
@@ -315,6 +395,7 @@ pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
             "q / Ctrl-C: quit",
             "",
             "Arrows point caller -> callee. Deleted roots use base evidence.",
+            "Green +→ added call; red -→ removed call. Shared routes stay neutral.",
         ];
         frame.render_widget(
             Paragraph::new(help.join("\n"))
@@ -325,7 +406,7 @@ pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
         return;
     }
     if area.width < 60 || area.height < 12 {
-        frame.render_widget(Paragraph::new("Terminal too small for graph. Resize to at least 60x12. Press q to quit or ? for help.").block(panel("DFlow")).wrap(Wrap { trim: false }), area);
+        frame.render_widget(Paragraph::new("Terminal too small for graph. Resize to at least 60x12. Press q to quit or ? for help.").block(panel("")).wrap(Wrap { trim: false }), area);
         return;
     }
     let vertical = Layout::default()
@@ -344,14 +425,23 @@ pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "{} | depth: {} | {} | {} changed | {} nodes\n{}\nArrows/j/k select  Shift+arrows/Page Up/Down pan  +/- depth  d expand  ? help  q quit",
-            mode_label(app.mode), app.depth, status, app.changed_roots.len(), app.layout.order.len(), identity
-        )).block(panel("DFlow")), vertical[0]);
-    let block = panel("Graph: caller -> callee");
+            "{} | depth: {} | {} | {} symbols | {} edge changes | {} nodes\n{}",
+            mode_label(app.mode),
+            app.depth,
+            status,
+            app.changed_roots.len(),
+            app.session.edge_comparison.changes.len(),
+            app.layout.order.len(),
+            identity
+        ))
+        .block(panel("")),
+        vertical[0],
+    );
+    let block = panel("");
     let inner = block.inner(vertical[1]);
     frame.render_widget(block, vertical[1]);
     if app.layout.components.is_empty() {
-        let mut message = vec!["No changed symbols".to_owned()];
+        let mut message = vec!["No symbol or edge changes".to_owned()];
         message.extend(app.diagnostic_lines());
         frame.render_widget(
             Paragraph::new(Text::from(message.join("\n"))).wrap(Wrap { trim: false }),
