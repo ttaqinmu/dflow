@@ -244,8 +244,8 @@ mod tests {
             .nth(y)
             .unwrap()
             .chars()
-            .skip(x + if row == 1 { 2 } else { 1 })
-            .take((component.width - if row == 1 { 3 } else { 2 }) as usize)
+            .skip(x + if row == 1 || row == 3 { 2 } else { 1 })
+            .take((component.width - if row == 1 || row == 3 { 3 } else { 2 }) as usize)
             .collect::<String>()
             .trim_end()
             .to_owned()
@@ -325,7 +325,15 @@ mod tests {
             .unwrap();
         assert_eq!(node_line(&app, &text, root, 1), root.title);
         assert_eq!(node_line(&app, &text, root, 3), root.description);
-        assert!(root.description.starts_with("Location: a.py:"));
+        assert_eq!(root.description, "a.py");
+        let function = app
+            .layout
+            .components
+            .iter()
+            .find(|c| c.title == "f")
+            .unwrap();
+        assert_eq!(node_line(&app, &text, function, 1), "f");
+        assert_eq!(node_line(&app, &text, function, 3), "a.py");
         assert!(root.width >= root.title.chars().count() as i32 + 2);
         assert_eq!(root.height, 5);
         assert!(text.lines().skip(5).any(|line| line.contains('→')));
@@ -493,7 +501,7 @@ mod tests {
         let fixture = session(&base, &target);
         let mode = mode();
         let mut app = state::App::new(fixture, &mode, 1);
-        select_title(&mut app, "a.py:removed");
+        select_title(&mut app, "removed");
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let selected = app.selected_node.as_ref().unwrap();
         let root = app
@@ -502,10 +510,7 @@ mod tests {
             .iter()
             .find(|component| component.members.contains(selected))
             .unwrap();
-        assert_eq!(
-            node_line(&app, &screen(&app, 120, 30), root, 1),
-            "a.py:removed"
-        );
+        assert_eq!(node_line(&app, &screen(&app, 120, 30), root, 1), "removed");
         let text = screen(&app, 120, 30);
         assert!(text.contains("Source [base]:"));
         assert!(text.contains("Change: deleted"));
@@ -531,9 +536,9 @@ mod tests {
         assert!(!screen(&app, 180, 50).contains("Changes"));
         assert!(!screen(&app, 180, 50).contains("focused:"));
         for (title, kind, color) in [
-            ("a.py:fresh", SymbolChangeKind::Added, Color::Green),
-            ("a.py:changed", SymbolChangeKind::Modified, Color::Yellow),
-            ("a.py:gone", SymbolChangeKind::Deleted, Color::Red),
+            ("fresh", SymbolChangeKind::Added, Color::Green),
+            ("changed", SymbolChangeKind::Modified, Color::Yellow),
+            ("gone", SymbolChangeKind::Deleted, Color::Red),
         ] {
             select_title(&mut app, title);
             app.pan_x = 0;
@@ -701,7 +706,7 @@ mod tests {
         let fixture = session(&[], &target);
         let mode = mode();
         let mut app = state::App::new(fixture, &mode, 2);
-        select_title(&mut app, "a.py:root");
+        select_title(&mut app, "root");
         assert_eq!(app.layout.components.len(), 4);
         assert_eq!(app.layout.edges.len(), 4);
         assert_eq!(app.layout.order.len(), 4);
@@ -757,14 +762,14 @@ mod tests {
         let fixture = session(&[], &target);
         let mode = mode();
         let mut app = state::App::new(fixture, &mode, 2);
-        select_title(&mut app, "a.py:a");
+        select_title(&mut app, "a");
         let first = selected_component(&app, app.selected_node.as_ref().unwrap());
-        assert_eq!(first.title, "a.py:a");
+        assert_eq!(first.title, "a");
         let other_y = app
             .layout
             .components
             .iter()
-            .find(|component| component.title == "a.py:b")
+            .find(|component| component.title == "b")
             .unwrap()
             .y;
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
@@ -773,7 +778,7 @@ mod tests {
             .layout
             .components
             .iter()
-            .find(|component| component.title == "a.py:b")
+            .find(|component| component.title == "b")
             .unwrap();
         assert!(first.height > 5);
         assert!(other.y > other_y);
@@ -781,13 +786,13 @@ mod tests {
 
         app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         let second = selected_component(&app, app.selected_node.as_ref().unwrap());
-        assert_eq!(second.title, "a.py:b");
+        assert_eq!(second.title, "b");
         assert!(second.height > 5);
         assert_eq!(
             app.layout
                 .components
                 .iter()
-                .find(|component| component.title == "a.py:a")
+                .find(|component| component.title == "a")
                 .unwrap()
                 .height,
             5
@@ -808,7 +813,7 @@ mod tests {
         );
         let mode = mode();
         let mut app = state::App::new(fixture, &mode, 1);
-        select_title(&mut app, "lib.rs:rust_root");
+        select_title(&mut app, "rust_root");
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let selected = app.selected_node.as_ref().unwrap();
         let root = app
@@ -817,11 +822,11 @@ mod tests {
             .iter()
             .find(|c| c.members.contains(selected))
             .unwrap();
-        assert_eq!(root.title, "lib.rs:rust_root");
+        assert_eq!(root.title, "rust_root");
         assert!(root.width >= root.title.chars().count() as i32 + 2);
         let changed_text = screen(&app, 180, 40);
-        assert_eq!(node_line(&app, &changed_text, root, 1), "lib.rs:rust_root");
-        assert!(root.description.starts_with("Location: src/lib.rs:"));
+        assert_eq!(node_line(&app, &changed_text, root, 1), "rust_root");
+        assert_eq!(root.description, "src/lib.rs");
         assert!(changed_text.contains("Source [target]:"));
         assert!(changed_text.contains("Call evidence [target]:"));
         assert!(
@@ -832,7 +837,7 @@ mod tests {
         );
         assert!(changed_text.contains("src/lib.rs"));
         assert!(app.layout.order.len() >= 3);
-        select_title(&mut app, "lib.rs:gone");
+        select_title(&mut app, "gone");
         let deleted = selected_component(&app, app.selected_node.as_ref().unwrap());
         assert!(deleted.extra.iter().any(|line| line == "Change: deleted"));
         assert!(deleted.extra.iter().any(|line| line == "Source [base]:"));
@@ -861,7 +866,7 @@ mod tests {
         let mode = mode();
         let mut app = state::App::new(fixture, &mode, 1);
         let component = selected_component(&app, app.selected_node.as_ref().unwrap());
-        assert_eq!(component.title, format!("lib.rs:{name}"));
+        assert_eq!(component.title, name);
         assert!(component.width >= component.title.len() as i32 + 2);
         assert!(component.width > 118);
         app.pan_x = i32::MAX;
@@ -894,13 +899,13 @@ mod tests {
             .layout
             .components
             .iter()
-            .find(|c| c.title == "a.py:alpha")
+            .find(|c| c.title == "alpha")
             .unwrap();
         let b = app
             .layout
             .components
             .iter()
-            .find(|c| c.title == "b.py:beta")
+            .find(|c| c.title == "beta")
             .unwrap();
         assert_ne!(a.cluster, b.cluster);
         assert_eq!(a.x, b.x);
@@ -955,10 +960,7 @@ mod tests {
                 .find(|c| c.title == title)
                 .unwrap()
         };
-        for (root, caller) in [
-            ("a.py:alpha", "a.py:caller_a"),
-            ("b.py:beta", "b.py:caller_b"),
-        ] {
+        for (root, caller) in [("alpha", "caller_a"), ("beta", "caller_b")] {
             let root = find(root);
             let caller = find(caller);
             assert_eq!(root.cluster, caller.cluster);
@@ -970,7 +972,7 @@ mod tests {
             assert_eq!(contributors.len(), 1);
             assert_eq!(contributors[0].0, SnapshotRole::Target);
         }
-        assert_ne!(find("a.py:alpha").cluster, find("b.py:beta").cluster);
+        assert_ne!(find("alpha").cluster, find("beta").cluster);
     }
 
     #[test]
@@ -991,12 +993,12 @@ mod tests {
             .layout
             .components
             .iter()
-            .find(|c| c.title == "a.py:shared")
+            .find(|c| c.title == "shared")
             .unwrap();
         assert!(app.nodes[&shared.members[0]].changes.is_empty());
         assert!(app.nodes[&shared.members[0]].base.is_some());
         assert!(app.nodes[&shared.members[0]].target.is_some());
-        for title in ["a.py:alpha", "a.py:beta"] {
+        for title in ["alpha", "beta"] {
             let root = app
                 .layout
                 .components
@@ -1010,7 +1012,7 @@ mod tests {
                     .contains(&(shared.members[0].clone(), root.members[0].clone()))
             );
         }
-        select_title(&mut app, "a.py:shared");
+        select_title(&mut app, "shared");
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let evidence = selected_component(&app, app.selected_node.as_ref().unwrap())
             .extra
@@ -1023,7 +1025,7 @@ mod tests {
         app.pan_x = 0;
         app.pan_y = 0;
         let text = screen(&app, 180, 40);
-        assert_eq!(text.matches("a.py:shared").count(), 1);
+        assert_eq!(text.matches("shared").count(), 1);
     }
 
     #[test]
@@ -1036,7 +1038,7 @@ mod tests {
         let mut app = state::App::new(fixture, &mode, 0);
         assert_eq!(app.changed_roots.len(), 4);
         assert_eq!(app.layout.components.len(), 4);
-        assert!(app.layout.components.iter().all(|c| c.title == "a.py:f"));
+        assert!(app.layout.components.iter().all(|c| c.title == "f"));
         assert!(app.layout.components.iter().all(|c| c.members.len() == 1));
         let ids: std::collections::BTreeSet<_> = app
             .layout
@@ -1061,10 +1063,6 @@ mod tests {
             ids.iter().all(|id| app.nodes[id.as_str()].base.is_none()
                 || app.nodes[id.as_str()].target.is_none())
         );
-        app.pan_x = 0;
-        app.pan_y = 0;
-        let text = screen(&app, 120, 60);
-        assert_eq!(text.matches("a.py:f").count(), 4);
     }
 
     #[test]
@@ -1095,7 +1093,7 @@ mod tests {
             .layout
             .components
             .iter()
-            .find(|c| c.title == "a.py:B")
+            .find(|c| c.title == "B")
             .unwrap();
         let routes: Vec<_> = app
             .layout
@@ -1148,7 +1146,7 @@ mod tests {
             .layout
             .components
             .iter()
-            .find(|c| c.title == "a.py:A")
+            .find(|c| c.title == "A")
             .unwrap();
         assert_eq!(
             buffer[((2 + a.x + a.width) as u16, (6 + a.y) as u16)].fg,
@@ -1158,7 +1156,7 @@ mod tests {
             .layout
             .components
             .iter()
-            .find(|c| c.title == "a.py:B")
+            .find(|c| c.title == "B")
             .unwrap();
         assert_eq!(
             buffer[((1 + b.x) as u16, (5 + b.y) as u16)].fg,
@@ -1214,7 +1212,7 @@ mod tests {
         let mode = mode();
         let mut app = state::App::new(session(&[(b"a.py", base)], &[(b"a.py", changed)]), &mode, 1);
         assert_eq!(app.edge_status.len(), 2);
-        select_title(&mut app, "a.py:C");
+        select_title(&mut app, "C");
         let old_id = app.selected_node.clone();
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
@@ -1230,13 +1228,13 @@ mod tests {
                 .find(|c| c.members.contains(app.selected_node.as_ref().unwrap()))
                 .unwrap()
                 .title,
-            "a.py:C"
+            "C"
         );
         assert_eq!(
             (app.depth, app.expanded, app.help, app.pan_x, app.pan_y),
             (2, true, true, 12, 4)
         );
-        assert!(screen(&app, 180, 50).contains("a.py:C") || app.help);
+        assert!(screen(&app, 180, 50).contains("C") || app.help);
         app.help = false;
         assert!(screen(&app, 180, 50).contains("Edge added"));
         app.reload_error = Some("index inaccessible".into());

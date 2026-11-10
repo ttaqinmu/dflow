@@ -285,31 +285,17 @@ impl<'a> App<'a> {
                     &component
                         .members
                         .iter()
-                        .map(|id| self.node_title(id))
+                        .map(|id| self.node_box_title(id))
                         .collect::<Vec<_>>()
                         .join(", "),
                 );
-                let location = if let Some(symbol) = &first.symbol {
-                    let range = symbol.source.range;
-                    format!(
-                        "Location: {}:{}:{}-{}:{}",
-                        display_path(&symbol.source.path),
-                        range.start.line,
-                        range.start.byte_column,
-                        range.end.line,
-                        range.end.byte_column
-                    )
-                } else {
-                    format!(
-                        "Location: {}",
-                        display_path(first.module_path.as_deref().unwrap_or_default())
-                    )
-                };
-                component.description = node_text(&if component.cycle {
-                    format!("Cycle ({}) | {location}", component.members.len())
-                } else {
-                    location
-                });
+                let path = first
+                    .symbol
+                    .as_ref()
+                    .map(|symbol| symbol.source.path.as_slice())
+                    .or(first.module_path.as_deref())
+                    .unwrap_or_default();
+                component.description = node_text(&display_path(path));
             }
             component.edge_labels = self
                 .edge_status
@@ -616,6 +602,20 @@ impl<'a> App<'a> {
         self.pan_y = self
             .pan_y
             .clamp(0, (self.layout.height - i32::from(viewport.height)).max(0));
+    }
+    fn node_box_title(&self, id: &str) -> String {
+        let (_, node) = self.native(id);
+        if let Some(symbol) = &node.symbol {
+            return safe_text(&symbol.name);
+        }
+        display_path(
+            node.module_path
+                .as_deref()
+                .unwrap_or_default()
+                .rsplit(|byte| *byte == b'/')
+                .next()
+                .unwrap_or_default(),
+        )
     }
     fn node_title(&self, id: &str) -> String {
         let (_, node) = self.native(id);

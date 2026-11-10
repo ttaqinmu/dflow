@@ -182,15 +182,22 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
         let sy = caller.y + 1;
         let tx = callee.x - 1;
         let ty = callee.y + 1 + edge.port as i32;
-        let lane = sx + 3;
+        let lane = edge.lane_x;
         let status = match edge.status {
             Some(EdgeChangeKind::Added) => ADDED_ROUTE,
             Some(EdgeChangeKind::Deleted) => DELETED_ROUTE,
             None => UNCHANGED_ROUTE,
         };
         connect(&mut lines, (sx, sy), (lane, sy), status);
-        connect(&mut lines, (lane, sy), (lane, ty), status);
-        connect(&mut lines, (lane, ty), (tx - 1, ty), status);
+        connect(&mut lines, (lane, sy), (lane, edge.route_y), status);
+        connect(
+            &mut lines,
+            (lane, edge.route_y),
+            (tx - 2, edge.route_y),
+            status,
+        );
+        connect(&mut lines, (tx - 2, edge.route_y), (tx - 2, ty), status);
+        connect(&mut lines, (tx - 2, ty), (tx - 1, ty), status);
         arrows.push((tx, ty, edge.status));
     }
     for ((x, y), (directions, statuses)) in lines {
@@ -330,7 +337,7 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
         put_text(
             buf,
             area,
-            component.x + 1,
+            component.x + 2,
             component.y + 3,
             (app.pan_x, app.pan_y),
             &component.description,

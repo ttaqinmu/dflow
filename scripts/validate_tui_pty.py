@@ -138,7 +138,7 @@ def collect(master: int, process: subprocess.Popen[bytes], marker: bytes | None,
     return bytes(output)
 
 
-def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"", fault: str | None = None, resize: bool = False, help_key: bool = False, expand_node: bool = False, node_title: bytes | None = None, canvas_titles: tuple[str, str] | None = None, edge_glyphs: bool = False) -> tuple[int, bytes]:
+def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"", fault: str | None = None, resize: bool = False, help_key: bool = False, expand_node: bool = False, node_title: bytes | None = None, node_path: bytes | None = None, canvas_titles: tuple[str, str] | None = None, edge_glyphs: bool = False) -> tuple[int, bytes]:
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
     before = termios.tcgetattr(slave)
@@ -186,7 +186,7 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
         if expand_node:
             assert b"Details" not in output, "separate Details panel appeared initially"
             assert node_title is not None and node_title in output, "node title was not visible"
-            assert b"Location:" in output, "collapsed node location was not visible"
+            assert node_path is not None and node_path.decode() in canvas(screen), "collapsed node path was not visible"
             expanded_output = input_and_redraw(master, process, screen, b"d", b"Source [target]:")
             assert b"Details" not in expanded_output, "separate Details panel appeared after d"
             output += expanded_output
@@ -353,7 +353,7 @@ def main() -> None:
         source.write_text("def f(): return 2  # " + "wide-node-evidence-" * 9 + "\ndef from_a(): return f()\n")
         other_source.write_text("def other(): return 2\ndef from_b(): return other()\n")
 
-        code, output = run_case(binary, root, marker=b"depth:", keys=b"q", resize=True, help_key=True, expand_node=True, node_title=b"a.py:f", canvas_titles=("a.py:f", "b.py:other"))
+        code, output = run_case(binary, root, marker=b"depth:", keys=b"q", resize=True, help_key=True, expand_node=True, node_title=b"f", node_path=b"a.py", canvas_titles=("f", "other"))
         assert code == 0 and b"complete" in output
         assert "─".encode() in output, "normal graph did not draw box lines"
         assert b"\x1b[38;5;3;49m" in output, "modified change did not receive yellow terminal styling"
@@ -385,7 +385,7 @@ def main() -> None:
         git(root, "add", "a.py", "b.py", "Cargo.toml", "src/lib.rs")
         git(root, "commit", "-m", "rust base")
         rust_source.write_text("pub fn rust_root() -> i32 { 2 }\npub fn caller() -> i32 { rust_root() }\n")
-        code, output = run_case(binary, root, marker=b"depth:", keys=b"q", expand_node=True, node_title=b"lib.rs:rust_root")
+        code, output = run_case(binary, root, marker=b"depth:", keys=b"q", expand_node=True, node_title=b"rust_root", node_path=b"src/lib.rs")
         assert code == 0 and b"rust_root" in output
 
         live = root / "live"

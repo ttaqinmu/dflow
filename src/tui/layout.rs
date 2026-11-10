@@ -30,6 +30,8 @@ pub struct LayoutEdge {
     pub caller: String,
     pub callee: String,
     pub port: usize,
+    pub lane_x: i32,
+    pub route_y: i32,
     pub status: Option<EdgeChangeKind>,
 }
 
@@ -40,6 +42,39 @@ pub struct Layout {
     pub order: Vec<String>,
     pub width: i32,
     pub height: i32,
+}
+
+fn clear_segment(components: &[Component], from: (i32, i32), to: (i32, i32)) -> bool {
+    components.iter().all(|box_| {
+        let left = box_.x;
+        let right = left + box_.width - 1;
+        let top = box_.y;
+        let bottom = top + box_.height - 1;
+        if from.1 == to.1 {
+            from.1 < top || from.1 > bottom || from.0.max(to.0) < left || from.0.min(to.0) > right
+        } else {
+            from.0 < left || from.0 > right || from.1.max(to.1) < top || from.1.min(to.1) > bottom
+        }
+    })
+}
+
+fn route_row(components: &[Component], lane: i32, stem: i32, sy: i32, ty: i32) -> i32 {
+    // Only a box boundary can change whether a horizontal row is clear.
+    // Prefer the existing direct row on ties; otherwise use the shortest clear detour.
+    let candidates = std::iter::once(ty).chain(std::iter::once(sy)).chain(
+        components
+            .iter()
+            .flat_map(|box_| [box_.y - 1, box_.y + box_.height]),
+    );
+    candidates
+        .filter(|&y| {
+            y >= 0
+                && clear_segment(components, (lane, sy), (lane, y))
+                && clear_segment(components, (lane, y), (stem, y))
+                && clear_segment(components, (stem, y), (stem, ty))
+        })
+        .min_by_key(|&y| (sy.abs_diff(y) + ty.abs_diff(y), y != ty))
+        .unwrap_or(ty)
 }
 
 fn level(id: usize, edges: &BTreeSet<(usize, usize)>, cache: &mut [Option<usize>]) -> usize {
@@ -176,6 +211,8 @@ pub fn build(impact: &Impact) -> Layout {
                 callee: callee.clone(),
                 port: 0,
                 status: None,
+                lane_x: 0,
+                route_y: 0,
             })
         })
         .collect();
@@ -207,7 +244,7 @@ pub fn place(view: &mut Layout) {
     for (id, component) in view.components.iter_mut().enumerate() {
         let incoming = view.edges.iter().filter(|edge| edge.to == id).count() as i32;
         component.width = (component.title.len() as i32 + 3)
-            .max(component.description.len() as i32 + 2)
+            .max(component.description.len() as i32 + 3)
             .max(
                 component
                     .extra
@@ -283,4 +320,22 @@ pub fn place(view: &mut Layout) {
         .map(|component| component.y + component.height)
         .max()
         .unwrap_or(0);
+    for edge in &mut view.edges {
+        let caller = &view.components[edge.from];
+        let callee = &view.components[edge.to];
+        let sy = caller.y + 1;
+        let ty = callee.y + 1 + edge.port as i32;
+        edge.lane_x = view
+            .components
+            .iter()
+            .filter(|component| {
+                component.cluster == caller.cluster && component.column == caller.column
+            })
+            .map(|component| component.x + component.width)
+            .max()
+            .unwrap()
+            + 3;
+        edge.route_y = route_row(&view.components, edge.lane_x, callee.x - 3, sy, ty);
+        view.height = view.height.max(edge.route_y + 1);
+    }
 }
