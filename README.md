@@ -4,7 +4,7 @@ DFlow is an experimental Rust tool for exploring how changes in a Git repository
 
 DFlow answers questions such as: *Which functions call the function I changed? What calls a newly added function? Who called a function before it was deleted?* It draws these relationships in the standalone CLI. A Zed integration is planned for later.
 
-> **Status:** Python M4 technical validation is complete; its human comparative usability study remains open. Rust M5 adds captured-manifest/module discovery and conservative static analysis without building, running, or downloading dependencies of the analyzed project. DFlow compares Git snapshots, traces certain callers, draws an interactive terminal graph, and emits a [versioned JSON report](docs/report-schema-v2.md). Unresolved calls remain explicit.
+> **Status:** Python M4 technical validation is complete; its human comparative usability study remains open. Rust M5 adds captured-manifest/module discovery and conservative static analysis without building, running, or downloading dependencies of the analyzed project. DFlow compares Git snapshots, traces certain callers, draws an interactive terminal graph, exports Mermaid/Graphviz DOT source, and emits a [versioned JSON report](docs/report-schema-v2.md). Unresolved calls remain explicit.
 
 ## Intended workflow
 
@@ -56,7 +56,7 @@ This is a conceptual boundary. The current implementation stays in one Rust crat
 - [x] Expose a stable JSON report through the CLI.
 - [x] Draw an interactive terminal caller graph.
 - [x] Analyze static Rust crate/module graphs and conservative intra-target calls.
-- [ ] Render focused Mermaid diagrams from the report.
+- [x] Export focused Mermaid and Graphviz DOT diagrams from the shared caller graph.
 - [ ] Prototype a Zed workflow using the same core analysis.
 
 Python support focuses on local calls and explicit imports. Method dispatch, dynamic imports, decorators, and runtime-generated calls require additional analysis and may remain unresolved.
@@ -75,13 +75,17 @@ cargo run -- local --staged
 cargo run -- local --unstaged
 cargo run -- branch --base main --target feature
 cargo run -- local --format json --depth 2 --include-test
+cargo run -- local --format mermaid --depth 2 > impact.mmd
+cargo run -- branch --base main --target feature --format dot > impact.dot
 cargo run -- --dir ../other-repo local
 cargo run -- branch --base main --target feature --dir ../other-repo
 ```
 
 `--dir DIR` selects the starting directory for Git repository discovery in either mode. Relative paths resolve against the process current directory, not the repository root; paths inside a repository work because discovery ascends to its root. Without `--dir`, discovery starts at the process current directory. A missing or non-repository directory is invalid input (exit 2).
 `--include-test` is off by default in both modes and can appear before or after the subcommand. Without it, conventional Python test files (`test_*.py`, `*_test.py`, `conftest.py`), Rust test files (`test_*.rs`, `*_test.rs`, `tests.rs`), and files under `test/`, `tests/`, or `__tests__/` are omitted. Test-named Python definitions (`test_*` and `Test*` classes) and Rust `#[test]`/`#[cfg(test)]` code within other source files are also omitted. With the flag, those files and definitions participate in both JSON reports and the TUI, including live reloads.
-If both stdin and stdout are terminals, the default output is an interactive graph. Otherwise the default is JSON. `--format json` always writes one JSON object to stdout; `--format tui` requires both terminals. Exit status is 0 for complete analysis, 1 for partial analysis or operational failure, and 2 for invalid input. A parse error produces a partial report, while an unresolved call by itself does not.
+If both stdin and stdout are terminals, the default output is an interactive graph. Otherwise the default is JSON. `--format json` always writes one JSON object to stdout; `--format tui` requires both terminals. `--format mermaid` and `--format dot` write one-shot plain diagram source with no Markdown fences or terminal escapes, even when redirected. DOT is Graphviz source, not a rendered image; use `dot -Tsvg impact.dot -o impact.svg` if Graphviz is installed. Exit status is 0 for complete analysis, 1 for partial analysis or operational failure, and 2 for invalid input. A parse error produces a partial report, while an unresolved call by itself does not.
+
+Diagram nodes show qualified symbol name or module basename, repository-relative path, base/target provenance, and any added/modified/deleted status. Arrows point from caller to callee; `+ target` and `- base` mark changed call edges. `--depth` adds incoming callers to the focused comparison graph (depth 0 still includes changed-edge endpoints). An empty comparison emits `No symbol or edge changes`; incomplete analysis also emits `PARTIAL analysis`. Non-UTF-8 paths are shown as `hex:` followed by lowercase bytes. Diagram exports are one-shot and do not run a watcher or build the analyzed project.
 
 Local TUI comparisons reload Git snapshots automatically when relevant source, ignore rules, index, or branch metadata changes; no keypress or restart is needed. Combined/unstaged mode observes worktree edits; `--staged` observes only committed/index changes. The TUI retains its last valid graph and displays `RELOAD ERROR` if a recapture fails, then clears the error after recovery. Invalid source is shown as partial analysis until repaired. Quitting with a remaining reload error exits 1. Branch comparisons stay fixed at their initially captured commit tips, and JSON output remains a one-shot report.
 

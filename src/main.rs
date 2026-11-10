@@ -1,6 +1,7 @@
 #[allow(dead_code)] // Some analysis fields are consumed by later milestones.
 mod analysis;
 mod cli;
+mod diagram;
 mod git;
 mod graph;
 mod languages;
@@ -58,20 +59,34 @@ fn main() {
                 };
                 std::process::exit(if complete { 0 } else { 1 });
             }
-            let value = session.report(&cli.mode, options.depth as usize);
-            let mut encoded = match serde_json::to_vec(&value) {
-                Ok(encoded) => encoded,
-                Err(error) => {
-                    eprintln!("cannot encode JSON report: {error}");
-                    std::process::exit(1);
+            let (mut encoded, format_name) = match format {
+                OutputFormat::Json => {
+                    let value = session.report(&cli.mode, options.depth as usize);
+                    let encoded = match serde_json::to_vec(&value) {
+                        Ok(encoded) => encoded,
+                        Err(error) => {
+                            eprintln!("cannot encode JSON report: {error}");
+                            std::process::exit(1);
+                        }
+                    };
+                    (encoded, "JSON report")
                 }
+                OutputFormat::Mermaid | OutputFormat::Dot => {
+                    let diagram_format = if matches!(format, OutputFormat::Mermaid) {
+                        diagram::DiagramFormat::Mermaid
+                    } else {
+                        diagram::DiagramFormat::Dot
+                    };
+                    (diagram::render(&session, options.depth as usize, diagram_format).into_bytes(), "diagram")
+                }
+                OutputFormat::Tui => unreachable!("terminal UI already handled"),
             };
             encoded.push(b'\n');
             let stdout = std::io::stdout();
             let mut output = stdout.lock();
             use std::io::Write;
             if let Err(error) = output.write_all(&encoded) {
-                eprintln!("cannot write JSON report: {error}");
+                eprintln!("cannot write {format_name}: {error}");
                 std::process::exit(1);
             }
             std::process::exit(if session.complete() { 0 } else { 1 });

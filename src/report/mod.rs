@@ -4,6 +4,24 @@ use crate::git::{CaptureResult, CapturedSnapshot, ChangeKind, SnapshotKind, Snap
 use crate::graph::{self, SnapshotGraph};
 use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
+
+pub(crate) type EdgeContributor = (SnapshotRole, String, String);
+
+#[derive(Default)]
+pub(crate) struct FocusedNode {
+    pub base: Option<String>,
+    pub target: Option<String>,
+    pub changes: Vec<SymbolChangeKind>,
+}
+
+pub(crate) struct FocusedGraph {
+    pub nodes: BTreeMap<String, FocusedNode>,
+    pub edges: BTreeMap<(String, String), Vec<EdgeContributor>>,
+    pub edge_status: BTreeMap<(String, String), graph::EdgeChangeKind>,
+    pub changed_roots: Vec<String>,
+    pub impact: graph::Impact,
+}
 
 pub struct AnalysisSession {
     pub capture: CaptureResult,
@@ -49,6 +67,99 @@ impl AnalysisSession {
     }
     pub fn complete(&self) -> bool {
         self.changes.complete && self.capture.diagnostics.is_empty()
+    }
+    pub(crate) fn focused_graph(&self, depth: usize) -> FocusedGraph {
+        let native_to_view = &self.edge_comparison.native_to_view;
+        let mut nodes: BTreeMap<String, FocusedNode> = BTreeMap::new();
+        for graph in [&self.base_graph, &self.target_graph] {
+            for id in graph.ids.keys() {
+                let entry = nodes.entry(native_to_view[id].clone()).or_default();
+                match graph.role {
+                    SnapshotRole::Base => entry.base = Some(id.clone()),
+                    SnapshotRole::Target => entry.target = Some(id.clone()),
+                }
+            }
+        }
+        let mut distances: BTreeMap<String, usize> = BTreeMap::new();
+        let mut changed_roots = Vec::new();
+        let mut edges: BTreeMap<(String, String), Vec<EdgeContributor>> = BTreeMap::new();
+        let mut edge_status = BTreeMap::new();
+        for change in &self.changes.changes {
+            let (role, symbol) = if change.kind == SymbolChangeKind::Deleted {
+                (SnapshotRole::Base, change.before.as_ref())
+            } else {
+                (SnapshotRole::Target, change.after.as_ref())
+            };
+            let Some(symbol) = symbol else { continue };
+            let graph = match role {
+                SnapshotRole::Base => &self.base_graph,
+                SnapshotRole::Target => &self.target_graph,
+            };
+            let Some(root) = graph.symbol_ids.get(&(symbol.unit.clone(), symbol.scope_id)) else {
+                continue;
+            };
+            let view_root = native_to_view[root].clone();
+            nodes.get_mut(&view_root).unwrap().changes.push(change.kind);
+            changed_roots.push(view_root);
+            let impact = graph::callers(graph, root, depth);
+            for (native, distance) in impact.nodes {
+                distances.entry(native_to_view[&native].clone())
+                    .and_modify(|old| *old = (*old).min(distance))
+                    .or_insert(distance);
+            }
+            for (caller, callee) in impact.edges {
+                edges.entry((native_to_view[&caller].clone(), native_to_view[&callee].clone()))
+                    .or_default().push((role, caller, callee));
+            }
+        }
+        for change in &self.edge_comparison.changes {
+            let (role, caller, callee) = if let Some((caller, callee)) = &change.before {
+                (SnapshotRole::Base, caller, callee)
+            } else if let Some((caller, callee)) = &change.after {
+                (SnapshotRole::Target, caller, callee)
+            } else {
+                continue;
+            };
+            let graph = match role {
+                SnapshotRole::Base => &self.base_graph,
+                SnapshotRole::Target => &self.target_graph,
+            };
+            let impact = graph::callers(graph, callee, depth);
+            for (native, distance) in impact.nodes {
+                distances.entry(native_to_view[&native].clone())
+                    .and_modify(|old| *old = (*old).min(distance))
+                    .or_insert(distance);
+            }
+            for (from, to) in impact.edges {
+                edges.entry((native_to_view[&from].clone(), native_to_view[&to].clone()))
+                    .or_default().push((role, from, to));
+            }
+            distances.entry(change.caller_view.clone()).or_insert(1);
+            distances.entry(change.callee_view.clone()).or_insert(0);
+            edges.entry((change.caller_view.clone(), change.callee_view.clone()))
+                .or_default().push((role, caller.clone(), callee.clone()));
+            edge_status.insert((change.caller_view.clone(), change.callee_view.clone()), change.kind);
+        }
+        changed_roots.sort();
+        changed_roots.dedup();
+        for node in nodes.values_mut() {
+            node.changes.sort_by_key(|kind| match kind {
+                SymbolChangeKind::Added => 0,
+                SymbolChangeKind::Modified => 1,
+                SymbolChangeKind::Deleted => 2,
+            });
+            node.changes.dedup();
+        }
+        for contributors in edges.values_mut() {
+            contributors.sort();
+            contributors.dedup();
+        }
+        let impact = graph::Impact {
+            root: changed_roots.first().cloned().unwrap_or_default(),
+            nodes: distances.into_iter().collect(),
+            edges: edges.keys().cloned().collect(),
+        };
+        FocusedGraph { nodes, edges, edge_status, changed_roots, impact }
     }
     pub fn report(&self, mode: &CompareMode, depth: usize) -> Value {
         let comparison = match mode {

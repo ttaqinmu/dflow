@@ -2,25 +2,16 @@ use super::layout;
 use crate::analysis::{SymbolChangeKind, SymbolKind};
 use crate::cli::CompareMode;
 use crate::git::SnapshotRole;
-use crate::graph::{self, EdgeChangeKind, EndpointIdentity, GraphNode, Impact, SnapshotGraph};
-use crate::report::AnalysisSession;
+use crate::graph::{EdgeChangeKind, EndpointIdentity, GraphNode, Impact, SnapshotGraph};
+use crate::report::{AnalysisSession, EdgeContributor, FocusedNode};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 use std::collections::BTreeMap;
 
-type EdgeContributor = (SnapshotRole, String, String);
-
-#[derive(Default)]
-pub struct NodeProvenance {
-    pub base: Option<String>,
-    pub target: Option<String>,
-    pub changes: Vec<SymbolChangeKind>,
-}
-
 pub struct App<'a> {
     pub session: AnalysisSession,
     pub mode: &'a CompareMode,
-    pub nodes: BTreeMap<String, NodeProvenance>,
+    pub nodes: BTreeMap<String, FocusedNode>,
     pub edges: BTreeMap<(String, String), Vec<EdgeContributor>>,
     pub edge_status: BTreeMap<(String, String), EdgeChangeKind>,
     pub changed_roots: Vec<String>,
@@ -141,110 +132,12 @@ impl<'a> App<'a> {
         }
     }
     fn refresh(&mut self) {
-        let native_to_view = &self.session.edge_comparison.native_to_view;
-        self.nodes.clear();
-        for graph in [&self.session.base_graph, &self.session.target_graph] {
-            for id in graph.ids.keys() {
-                let entry = self.nodes.entry(native_to_view[id].clone()).or_default();
-                match graph.role {
-                    SnapshotRole::Base => entry.base = Some(id.clone()),
-                    SnapshotRole::Target => entry.target = Some(id.clone()),
-                }
-            }
-        }
-        let mut distances: BTreeMap<String, usize> = BTreeMap::new();
-        self.changed_roots.clear();
-        self.edges.clear();
-        self.edge_status.clear();
-        for change in &self.session.changes.changes {
-            let (role, symbol) = if change.kind == SymbolChangeKind::Deleted {
-                (SnapshotRole::Base, change.before.as_ref())
-            } else {
-                (SnapshotRole::Target, change.after.as_ref())
-            };
-            let Some(symbol) = symbol else { continue };
-            let graph = match role {
-                SnapshotRole::Base => &self.session.base_graph,
-                SnapshotRole::Target => &self.session.target_graph,
-            };
-            let Some(root) = graph
-                .symbol_ids
-                .get(&(symbol.unit.clone(), symbol.scope_id))
-            else {
-                continue;
-            };
-            let view_root = native_to_view[root].clone();
-            self.nodes
-                .get_mut(&view_root)
-                .unwrap()
-                .changes
-                .push(change.kind);
-            self.changed_roots.push(view_root);
-            let impact = graph::callers(graph, root, self.depth);
-            for (native, distance) in impact.nodes {
-                distances
-                    .entry(native_to_view[&native].clone())
-                    .and_modify(|old| *old = (*old).min(distance))
-                    .or_insert(distance);
-            }
-            for (caller, callee) in impact.edges {
-                self.edges
-                    .entry((
-                        native_to_view[&caller].clone(),
-                        native_to_view[&callee].clone(),
-                    ))
-                    .or_default()
-                    .push((role, caller, callee));
-            }
-        }
-        for change in &self.session.edge_comparison.changes {
-            let (role, caller, callee) = if let Some((caller, callee)) = &change.before {
-                (SnapshotRole::Base, caller, callee)
-            } else if let Some((caller, callee)) = &change.after {
-                (SnapshotRole::Target, caller, callee)
-            } else {
-                continue;
-            };
-            let graph = self.graph(role);
-            let impact = graph::callers(graph, callee, self.depth);
-            for (native, distance) in impact.nodes {
-                distances
-                    .entry(native_to_view[&native].clone())
-                    .and_modify(|old| *old = (*old).min(distance))
-                    .or_insert(distance);
-            }
-            for (from, to) in impact.edges {
-                self.edges
-                    .entry((native_to_view[&from].clone(), native_to_view[&to].clone()))
-                    .or_default()
-                    .push((role, from, to));
-            }
-            distances.entry(change.caller_view.clone()).or_insert(1);
-            distances.entry(change.callee_view.clone()).or_insert(0);
-            self.edges
-                .entry((change.caller_view.clone(), change.callee_view.clone()))
-                .or_default()
-                .push((role, caller.clone(), callee.clone()));
-            self.edge_status.insert(
-                (change.caller_view.clone(), change.callee_view.clone()),
-                change.kind,
-            );
-        }
-        self.changed_roots.sort();
-        self.changed_roots.dedup();
-        for node in self.nodes.values_mut() {
-            node.changes.sort_by_key(|kind| kind_name_order(*kind));
-            node.changes.dedup();
-        }
-        for contributors in self.edges.values_mut() {
-            contributors.sort();
-            contributors.dedup();
-        }
-        self.impact = Impact {
-            root: self.changed_roots.first().cloned().unwrap_or_default(),
-            nodes: distances.into_iter().collect(),
-            edges: self.edges.keys().cloned().collect(),
-        };
+        let focused = self.session.focused_graph(self.depth);
+        self.nodes = focused.nodes;
+        self.edges = focused.edges;
+        self.edge_status = focused.edge_status;
+        self.changed_roots = focused.changed_roots;
+        self.impact = focused.impact;
         self.layout = layout::build(&self.impact);
         for edge in &mut self.layout.edges {
             edge.status = self
@@ -649,13 +542,6 @@ impl<'a> App<'a> {
             title.push_str(&symbol.name);
         }
         title
-    }
-}
-fn kind_name_order(kind: SymbolChangeKind) -> usize {
-    match kind {
-        SymbolChangeKind::Added => 0,
-        SymbolChangeKind::Modified => 1,
-        SymbolChangeKind::Deleted => 2,
     }
 }
 pub fn kind(kind: SymbolChangeKind) -> &'static str {

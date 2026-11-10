@@ -49,6 +49,8 @@ pub struct AnalyzeOptions {
 pub enum OutputFormat {
     Tui,
     Json,
+    Mermaid,
+    Dot,
 }
 
 impl AnalyzeOptions {
