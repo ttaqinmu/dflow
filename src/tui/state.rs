@@ -2,7 +2,7 @@ use super::layout;
 use crate::analysis::SymbolChangeKind;
 use crate::cli::CompareMode;
 use crate::git::SnapshotRole;
-use crate::graph::{self, EdgeChangeKind, GraphNode, Impact, SnapshotGraph};
+use crate::graph::{self, EdgeChangeKind, EndpointIdentity, GraphNode, Impact, SnapshotGraph};
 use crate::report::AnalysisSession;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
@@ -18,7 +18,7 @@ pub struct NodeProvenance {
 }
 
 pub struct App<'a> {
-    pub session: &'a AnalysisSession,
+    pub session: AnalysisSession,
     pub mode: &'a CompareMode,
     pub nodes: BTreeMap<String, NodeProvenance>,
     pub edges: BTreeMap<(String, String), Vec<EdgeContributor>>,
@@ -32,9 +32,10 @@ pub struct App<'a> {
     pub pan_x: i32,
     pub pan_y: i32,
     pub help: bool,
+    pub reload_error: Option<String>,
 }
 impl<'a> App<'a> {
-    pub fn new(session: &'a AnalysisSession, mode: &'a CompareMode, depth: usize) -> Self {
+    pub fn new(session: AnalysisSession, mode: &'a CompareMode, depth: usize) -> Self {
         let mut app = Self {
             session,
             mode,
@@ -54,6 +55,7 @@ impl<'a> App<'a> {
             pan_x: 0,
             pan_y: 0,
             help: false,
+            reload_error: None,
         };
         app.refresh();
         app
@@ -73,6 +75,70 @@ impl<'a> App<'a> {
         };
         let graph = self.graph(role);
         (graph, &graph.graph[graph.ids[native]])
+    }
+    fn endpoint_key(&self, id: &str) -> Option<EndpointIdentity> {
+        let (graph, node) = self.native(id);
+        if let Some(symbol) = &node.symbol {
+            let key = (
+                symbol.unit.clone(),
+                symbol.language,
+                symbol.qualified_name.clone(),
+                symbol.name.clone(),
+            );
+            let count = graph
+                .graph
+                .node_weights()
+                .filter(|node| {
+                    node.symbol.as_ref().is_some_and(|s| {
+                        (
+                            s.unit.clone(),
+                            s.language,
+                            s.qualified_name.clone(),
+                            s.name.clone(),
+                        ) == key
+                    })
+                })
+                .take(2)
+                .count();
+            (count == 1).then_some(EndpointIdentity::Symbol(key))
+        } else {
+            graph
+                .module_ids
+                .iter()
+                .find(|(_, native)| native.as_str() == node.id)
+                .map(|(unit, _)| EndpointIdentity::Module(unit.clone()))
+        }
+    }
+    pub fn replace_session(&mut self, next: AnalysisSession) {
+        let selected = self
+            .selected_node
+            .as_ref()
+            .and_then(|id| self.endpoint_key(id));
+        let pan = (self.pan_x, self.pan_y);
+        self.session = next;
+        self.reload_error = None;
+        self.selected_node = None;
+        self.refresh();
+        let mut matches = self
+            .layout
+            .order
+            .iter()
+            .filter(|id| self.endpoint_key(id).as_ref() == selected.as_ref());
+        let match_id = if selected.is_some() {
+            matches.next().cloned().filter(|_| matches.next().is_none())
+        } else {
+            None
+        };
+        if let Some(id) = match_id {
+            if self.selected_node.as_ref() != Some(&id) {
+                self.selected_node = Some(id);
+                self.relayout();
+            }
+            (self.pan_x, self.pan_y) = pan;
+        } else {
+            self.expanded = false;
+            self.relayout();
+        }
     }
     fn refresh(&mut self) {
         let native_to_view = &self.session.edge_comparison.native_to_view;

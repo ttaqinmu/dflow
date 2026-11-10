@@ -1,8 +1,10 @@
 mod layout;
 mod render;
 mod state;
+mod watch;
 
 use crate::cli::CompareMode;
+use crate::git::{self, CaptureResult, CapturedSnapshot};
 use crate::report::AnalysisSession;
 use crossterm::event::{self, Event};
 use crossterm::execute;
@@ -13,7 +15,9 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use std::io::{self, Stdout};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 struct TerminalGuard {
     raw: bool,
@@ -54,8 +58,27 @@ impl Drop for TerminalGuard {
     }
 }
 
-pub fn run(session: &AnalysisSession, mode: &CompareMode, depth: usize) -> io::Result<()> {
+fn same_snapshot(a: &CapturedSnapshot, b: &CapturedSnapshot) -> bool {
+    a.kind == b.kind
+        && a.content_id == b.content_id
+        && a.commit_id == b.commit_id
+        && a.branch == b.branch
+}
+
+fn same_capture(a: &CaptureResult, b: &CaptureResult) -> bool {
+    same_snapshot(&a.pair.base, &b.pair.base)
+        && same_snapshot(&a.pair.target, &b.pair.target)
+        && a.diagnostics == b.diagnostics
+}
+
+pub fn run(
+    session: AnalysisSession,
+    mode: &CompareMode,
+    depth: usize,
+    discovery_dir: PathBuf,
+) -> io::Result<bool> {
     let mut app = state::App::new(session, mode, depth);
+    let mut watch = watch::ReloadWatch::new(mode, &discovery_dir);
     let guard = Arc::new(Mutex::new(TerminalGuard::enter()?));
     let previous = Arc::new(std::panic::take_hook());
     let panic_guard = Arc::clone(&guard);
@@ -75,30 +98,71 @@ pub fn run(session: &AnalysisSession, mode: &CompareMode, depth: usize) -> io::R
             _ => {}
         }
         let mut terminal = Terminal::new(CrosstermBackend::<Stdout>::new(io::stdout()))?;
+        let mut redraw = true;
         loop {
-            let size = terminal.size()?;
-            let viewport = Rect::new(
-                0,
-                0,
-                size.width.saturating_sub(2),
-                size.height.saturating_sub(render::HEADER_HEIGHT + 2),
-            );
-            app.clamp(viewport);
-            terminal.draw(|frame| render::render(&app, frame))?;
-            match event::read()? {
-                Event::Key(key) if app.handle_key(key) => break,
-                Event::Resize(_, _) => {}
-                _ => {}
+            if redraw {
+                let size = terminal.size()?;
+                let viewport = Rect::new(
+                    0,
+                    0,
+                    size.width.saturating_sub(2),
+                    size.height.saturating_sub(render::HEADER_HEIGHT + 2),
+                );
+                app.clamp(viewport);
+                terminal.draw(|frame| render::render(&app, frame))?;
+                redraw = false;
+            }
+            if matches!(mode, CompareMode::Branch(_)) {
+                match event::read()? {
+                    Event::Key(key) if app.handle_key(key) => break,
+                    Event::Key(_) | Event::Resize(_, _) => redraw = true,
+                    _ => {}
+                }
+                continue;
+            }
+            if event::poll(Duration::from_millis(50))? {
+                loop {
+                    match event::read()? {
+                        Event::Key(key) if app.handle_key(key) => {
+                            return Ok(app.session.complete() && app.reload_error.is_none());
+                        }
+                        Event::Key(_) | Event::Resize(_, _) => redraw = true,
+                        _ => {}
+                    }
+                    if !event::poll(Duration::ZERO)? {
+                        break;
+                    }
+                }
+            }
+            if watch.should_capture(Instant::now()) {
+                match git::capture_comparison(mode, discovery_dir.clone()) {
+                    Ok(capture) => {
+                        if !same_capture(&capture, &app.session.capture) {
+                            app.replace_session(AnalysisSession::new(capture));
+                            redraw = true;
+                        } else if app.reload_error.take().is_some() {
+                            redraw = true;
+                        }
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        if app.reload_error.as_ref() != Some(&message) {
+                            app.reload_error = Some(message);
+                            redraw = true;
+                        }
+                    }
+                }
+                watch.captured(Instant::now());
             }
         }
-        Ok(())
+        Ok(app.session.complete() && app.reload_error.is_none())
     })();
     let cleanup = guard
         .lock()
         .map_err(|_| io::Error::other("terminal cleanup state poisoned"))
         .and_then(|mut guard| guard.restore());
     std::panic::set_hook(Box::new(move |info| previous(info)));
-    result.and(cleanup)
+    cleanup.and(result)
 }
 
 #[cfg(test)]
@@ -247,7 +311,7 @@ mod tests {
         )];
         let fixture = session(&[], &target);
         let mode = mode();
-        let app = state::App::new(&fixture, &mode, 1);
+        let app = state::App::new(fixture, &mode, 1);
         let text = screen(&app, 120, 30);
         assert!(text.lines().next().unwrap().starts_with("┌─"));
         assert!(!text.contains("Call evidence ["));
@@ -275,7 +339,7 @@ mod tests {
             b"def a(): b()\ndef b(): a()\n".as_slice(),
         )];
         let cycle_session = session(&[], &target);
-        let mut cycle_app = state::App::new(&cycle_session, &mode, 2);
+        let mut cycle_app = state::App::new(cycle_session, &mode, 2);
         assert!(
             cycle_app
                 .layout
@@ -304,7 +368,7 @@ mod tests {
         let target = [(b"a.py".as_slice(), b"def f(): pass\nf()\n".as_slice())];
         let fixture = session(&[], &target);
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 1);
+        let mut app = state::App::new(fixture, &mode, 1);
         app.pan_x = 0;
         app.pan_y = 0;
         let module = app
@@ -328,7 +392,7 @@ mod tests {
         )];
         let session = session(&base, &target);
         let mode = mode();
-        let mut app = state::App::new(&session, &mode, 0);
+        let mut app = state::App::new(session, &mode, 0);
         assert_eq!(app.changed_roots.len(), 1);
         assert_eq!(app.layout.order.len(), 1);
         let root = app.selected_node.clone();
@@ -358,7 +422,7 @@ mod tests {
         )];
         let fixture = session(&[], &target);
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 1);
+        let mut app = state::App::new(fixture, &mode, 1);
         let selected = app.selected_node.clone().unwrap();
         let original = selected_component(&app, &selected);
         let (original_width, original_height) = (original.width, original.height);
@@ -409,11 +473,11 @@ mod tests {
     fn empty_partial_and_small_terminal_are_explicit() {
         let mode = mode();
         let empty = session(&[], &[]);
-        let app = state::App::new(&empty, &mode, 1);
+        let app = state::App::new(empty, &mode, 1);
         assert!(screen(&app, 120, 30).contains("No symbol or edge changes"));
         assert!(screen(&app, 50, 10).contains("Terminal too small"));
         let bad = session(&[], &[(b"bad.py", b"def f(:\n")]);
-        let mut app = state::App::new(&bad, &mode, 1);
+        let mut app = state::App::new(bad, &mode, 1);
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let text = screen(&app, 120, 30);
         assert!(text.contains("PARTIAL analysis"));
@@ -428,7 +492,7 @@ mod tests {
         let target = [(b"a.py".as_slice(), b"def legacy(): pass\n".as_slice())];
         let fixture = session(&base, &target);
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 1);
+        let mut app = state::App::new(fixture, &mode, 1);
         select_title(&mut app, "a.py:removed");
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let selected = app.selected_node.as_ref().unwrap();
@@ -461,7 +525,7 @@ mod tests {
         )];
         let fixture = session(&base, &target);
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 1);
+        let mut app = state::App::new(fixture, &mode, 1);
         assert!(screen(&app, 180, 50).contains("base WorkingTree"));
         assert!(screen(&app, 180, 50).contains("target WorkingTree"));
         assert!(!screen(&app, 180, 50).contains("Changes"));
@@ -542,7 +606,7 @@ mod tests {
         )];
         let fixture = session(&[], &target);
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 1);
+        let mut app = state::App::new(fixture, &mode, 1);
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
 
         let check = |app: &state::App<'_>, terminal: &mut Terminal<TestBackend>| {
@@ -636,7 +700,7 @@ mod tests {
         )];
         let fixture = session(&[], &target);
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 2);
+        let mut app = state::App::new(fixture, &mode, 2);
         select_title(&mut app, "a.py:root");
         assert_eq!(app.layout.components.len(), 4);
         assert_eq!(app.layout.edges.len(), 4);
@@ -692,7 +756,7 @@ mod tests {
         )];
         let fixture = session(&[], &target);
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 2);
+        let mut app = state::App::new(fixture, &mode, 2);
         select_title(&mut app, "a.py:a");
         let first = selected_component(&app, app.selected_node.as_ref().unwrap());
         assert_eq!(first.title, "a.py:a");
@@ -743,7 +807,7 @@ mod tests {
             &[manifest, (b"src/lib.rs", after)],
         );
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 1);
+        let mut app = state::App::new(fixture, &mode, 1);
         select_title(&mut app, "lib.rs:rust_root");
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let selected = app.selected_node.as_ref().unwrap();
@@ -795,7 +859,7 @@ mod tests {
             &[(b"Cargo.toml", manifest), (b"src/lib.rs", after.as_bytes())],
         );
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 1);
+        let mut app = state::App::new(fixture, &mode, 1);
         let component = selected_component(&app, app.selected_node.as_ref().unwrap());
         assert_eq!(component.title, format!("lib.rs:{name}"));
         assert!(component.width >= component.title.len() as i32 + 2);
@@ -822,7 +886,7 @@ mod tests {
             ],
         );
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 0);
+        let mut app = state::App::new(fixture, &mode, 0);
         assert_eq!(app.changed_roots.len(), 2);
         assert_eq!(app.layout.components.len(), 2);
         assert!(app.layout.edges.is_empty());
@@ -880,7 +944,7 @@ mod tests {
             ],
         );
         let mode = mode();
-        let app = state::App::new(&fixture, &mode, 1);
+        let app = state::App::new(fixture, &mode, 1);
         assert_eq!(app.changed_roots.len(), 2);
         assert_eq!(app.layout.components.len(), 4);
         assert_eq!(app.impact.edges.len(), 2);
@@ -917,7 +981,7 @@ mod tests {
             b"def alpha(): return 2\ndef beta(): return 2\ndef shared(): return alpha() + beta()\n";
         let fixture = session(&[(b"a.py", before)], &[(b"a.py", after)]);
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 0);
+        let mut app = state::App::new(fixture, &mode, 0);
         assert_eq!(app.layout.components.len(), 2);
         assert!(app.impact.edges.is_empty());
         app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
@@ -969,7 +1033,7 @@ mod tests {
             &[(b"a.py", b"def f(): return 3\ndef f(): return 4\n")],
         );
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 0);
+        let mut app = state::App::new(fixture, &mode, 0);
         assert_eq!(app.changed_roots.len(), 4);
         assert_eq!(app.layout.components.len(), 4);
         assert!(app.layout.components.iter().all(|c| c.title == "a.py:f"));
@@ -1009,7 +1073,7 @@ mod tests {
         let target = [(b"a.py".as_slice(), b"def f(): pass #\x1b[31m\n".as_slice())];
         let fixture = session(&[], &target);
         let mode = mode();
-        let app = state::App::new(&fixture, &mode, 1);
+        let app = state::App::new(fixture, &mode, 1);
         let text = screen(&app, 120, 30);
         assert!(!text.contains('\u{1b}'));
     }
@@ -1019,7 +1083,7 @@ mod tests {
         let after = b"def B(): pass\ndef D(): pass\ndef A(): D()\ndef C(): B()\ndef X(): B()\n";
         let fixture = session(&[(b"a.py", before)], &[(b"a.py", after)]);
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 0);
+        let mut app = state::App::new(fixture, &mode, 0);
         assert!(app.changed_roots.is_empty());
         assert_eq!(app.edge_status.len(), 4);
         assert!(app.selected_node.is_some());
@@ -1114,7 +1178,7 @@ mod tests {
         let after = b"def A(): B()\ndef B(): A(); B()\n";
         let fixture = session(&[(b"a.py", before)], &[(b"a.py", after)]);
         let mode = mode();
-        let mut app = state::App::new(&fixture, &mode, 0);
+        let mut app = state::App::new(fixture, &mode, 0);
         assert_eq!(app.edge_status.len(), 1);
         app.pan_x = 0;
         app.pan_y = 0;
@@ -1138,5 +1202,60 @@ mod tests {
             terminal.backend().buffer()[((2 + component.x) as u16, (9 + component.y) as u16)].fg,
             Color::Green
         );
+    }
+    #[test]
+    fn replacement_preserves_unique_endpoint_and_falls_back_when_absent() {
+        let base = b"def B(x): return x\ndef C(x): return x\ndef A(x): return B(x)\n";
+        let changed = b"def B(x): return x\ndef C(x): return x\ndef A(x): return C(x)\n";
+        let shifted =
+            b"def AA(x): return x\ndef B(x): return x\ndef C(x): return x\ndef A(x): return C(x)\n";
+        let shifted_base =
+            b"def AA(x): return x\ndef B(x): return x\ndef C(x): return x\ndef A(x): return B(x)\n";
+        let mode = mode();
+        let mut app = state::App::new(session(&[(b"a.py", base)], &[(b"a.py", changed)]), &mode, 1);
+        assert_eq!(app.edge_status.len(), 2);
+        select_title(&mut app, "a.py:C");
+        let old_id = app.selected_node.clone();
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
+        app.help = true;
+        app.pan_x = 12;
+        app.pan_y = 4;
+        app.replace_session(session(&[(b"a.py", shifted_base)], &[(b"a.py", shifted)]));
+        assert_ne!(app.selected_node, old_id);
+        assert_eq!(
+            app.layout
+                .components
+                .iter()
+                .find(|c| c.members.contains(app.selected_node.as_ref().unwrap()))
+                .unwrap()
+                .title,
+            "a.py:C"
+        );
+        assert_eq!(
+            (app.depth, app.expanded, app.help, app.pan_x, app.pan_y),
+            (2, true, true, 12, 4)
+        );
+        assert!(screen(&app, 180, 50).contains("a.py:C") || app.help);
+        app.help = false;
+        assert!(screen(&app, 180, 50).contains("Edge added"));
+        app.reload_error = Some("index inaccessible".into());
+        assert!(screen(&app, 180, 50).contains("RELOAD ERROR: index inaccessible"));
+        assert_eq!(app.edge_status.len(), 2);
+        app.replace_session(session(&[(b"a.py", base)], &[(b"a.py", base)]));
+        assert!(app.reload_error.is_none());
+        assert!(app.selected_node.is_none());
+        assert!(!app.expanded);
+        assert!(screen(&app, 180, 50).contains("No symbol or edge changes"));
+    }
+    #[test]
+    fn ambiguous_selected_symbol_does_not_jump_to_another_occurrence() {
+        let before = b"def f(): return 1\ndef f(): return 2\n";
+        let after = b"def f(): return 3\ndef f(): return 4\n";
+        let mode = mode();
+        let mut app = state::App::new(session(&[(b"a.py", before)], &[(b"a.py", after)]), &mode, 0);
+        app.expanded = true;
+        app.replace_session(session(&[(b"a.py", before)], &[(b"a.py", after)]));
+        assert!(!app.expanded);
     }
 }

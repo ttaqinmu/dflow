@@ -39,15 +39,19 @@ fn main() {
         Some(dir) => cwd.join(dir),
         None => cwd,
     };
-    match git::capture_comparison(&cli.mode, discovery_dir) {
+    match git::capture_comparison(&cli.mode, discovery_dir.clone()) {
         Ok(capture) => {
             let session = report::AnalysisSession::new(capture);
             if matches!(format, OutputFormat::Tui) {
-                if let Err(error) = tui::run(&session, &cli.mode, options.depth as usize) {
-                    eprintln!("terminal UI error: {error}");
-                    std::process::exit(1);
-                }
-                std::process::exit(if session.complete() { 0 } else { 1 });
+                let complete =
+                    match tui::run(session, &cli.mode, options.depth as usize, discovery_dir) {
+                        Ok(complete) => complete,
+                        Err(error) => {
+                            eprintln!("terminal UI error: {error}");
+                            std::process::exit(1);
+                        }
+                    };
+                std::process::exit(if complete { 0 } else { 1 });
             }
             let value = session.report(&cli.mode, options.depth as usize);
             let mut encoded = match serde_json::to_vec(&value) {

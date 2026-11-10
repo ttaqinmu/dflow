@@ -248,6 +248,93 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
         os.close(slave)
 
 
+def live_case(binary: Path, root: Path, *, staged: bool = False) -> None:
+    source = root / "a.py"
+    base = "def B(x): return x\ndef C(x): return x\ndef A(x): return B(x)\n"
+    changed = "def B(x): return x\ndef C(x): return x\ndef A(x): return C(x)\n"
+    source.write_text(base)
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 120, 0, 0))
+    before = termios.tcgetattr(slave)
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
+    command = [str(binary), "local", "--format", "tui"]
+    if staged:
+        command.append("--staged")
+    process = subprocess.Popen(command, cwd=root, stdin=slave, stdout=slave, stderr=slave, env=env)
+    screen = Screen()
+    output = bytearray()
+
+    def expect(predicate, label: str, timeout: float = 3) -> str:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if ready:
+                chunk = os.read(master, 65536)
+                output.extend(chunk)
+                screen.feed(chunk)
+                image = "\n".join(screen.rows())
+                if predicate(image):
+                    return canvas(screen)
+            if process.poll() is not None:
+                break
+        raise AssertionError(f"live TUI did not show {label} within {timeout}s: {''.join(screen.rows()[:4])}")
+
+    def settle() -> None:
+        chunk = collect(master, process, None, 0.25)
+        output.extend(chunk)
+        screen.feed(chunk)
+
+    try:
+        expect(lambda image: "No symbol or edge changes" in image and "complete" in image, "initial empty graph")
+        source.write_text(changed)
+        if staged:
+            chunk = collect(master, process, None, 1.2)
+            output.extend(chunk)
+            screen.feed(chunk)
+            assert "No symbol or edge changes" in canvas(screen), "unstaged worktree edit changed staged graph"
+            git(root, "add", "a.py")
+        image = expect(lambda image: "0 symbols | 2 edge changes" in image and "+→" in image and "-→" in image, "changed edges")
+        assert "complete" in image
+        if not staged:
+            index = root / ".git/index"
+            saved_index = index.read_bytes()
+            index.write_bytes(b"invalid index")
+            image = expect(lambda image: "RELOAD ERROR:" in image, "capture failure")
+            assert "+→" in image and "-→" in image, "failed capture discarded the last valid graph"
+            index.write_bytes(saved_index)
+            expect(lambda image: "RELOAD ERROR:" not in image and "+→" in image and "-→" in image, "capture recovery")
+        if not staged:
+            os.write(master, b"d")
+            expect(lambda image: "Edge added [target]" in image or "Edge deleted [base]" in image, "expanded edge evidence")
+            source.write_text(base)
+            expect(lambda image: "No symbol or edge changes" in image, "empty graph after repair")
+            source.write_text("def A(:\n")
+            expect(lambda image: "PARTIAL analysis" in image, "invalid Python partial analysis")
+            source.write_text(base)
+            expect(lambda image: "No symbol or edge changes" in image and "complete" in image, "recovered complete analysis")
+            source.write_text(changed)
+            expect(lambda image: "0 symbols | 2 edge changes" in image, "edges after recovery")
+            os.write(master, b"j\x1b[1;2C\x1b[1;2D")
+            settle()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 100, 0, 0))
+            screen.resize(100, 20)
+            os.kill(process.pid, signal.SIGWINCH)
+            expect(lambda image: "0 symbols | 2 edge changes" in image and "+→" in image and "-→" in image, "resized graph")
+        os.write(master, b"\x03" if staged else b"q")
+        process.wait(timeout=5)
+        output.extend(collect(master, process, None, 0.2))
+        assert process.returncode == 0, f"live TUI exit status {process.returncode}"
+        assert termios.tcgetattr(slave) == before, "live TUI failed to restore terminal"
+        assert b"\x1b[?1049h" in output and b"\x1b[?1049l" in output, "live TUI did not restore alternate screen"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        os.close(master)
+        os.close(slave)
+
+
 def main() -> None:
     binary = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/dflow").resolve()
     if not binary.is_file():
@@ -301,6 +388,16 @@ def main() -> None:
         code, output = run_case(binary, root, marker=b"depth:", keys=b"q", expand_node=True, node_title=b"lib.rs:rust_root")
         assert code == 0 and b"rust_root" in output
 
+        live = root / "live"
+        live.mkdir()
+        (live / "a.py").write_text("def B(x): return x\ndef C(x): return x\ndef A(x): return B(x)\n")
+        git(live, "init")
+        git(live, "config", "user.name", "Fixture")
+        git(live, "config", "user.email", "fixture@example.com")
+        git(live, "add", "a.py")
+        git(live, "commit", "-m", "live base")
+        live_case(binary, live)
+        live_case(binary, live, staged=True)
         print("PTY: changed edge markers across redraw, pan, navigation, expansion and resize; Python/Rust graph, partial analysis, faults, and terminal restoration passed")
 
 

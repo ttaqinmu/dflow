@@ -425,7 +425,11 @@ pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
     );
     frame.render_widget(
         Paragraph::new(format!(
-            "{} | depth: {} | {} | {} symbols | {} edge changes | {} nodes\n{}",
+            "{}{} | depth: {} | {} | {} symbols | {} edge changes | {} nodes\n{}",
+            app.reload_error
+                .as_ref()
+                .map(|e| format!("RELOAD ERROR: {} | ", safe_text(e)))
+                .unwrap_or_default(),
             mode_label(app.mode),
             app.depth,
             status,

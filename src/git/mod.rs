@@ -54,7 +54,7 @@ pub struct FileChange {
     pub path: Vec<u8>,
     pub kind: ChangeKind,
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[allow(dead_code)] // Consumed by analysis/report milestones after M1.
 pub struct Diagnostic {
     pub path: Vec<u8>,
