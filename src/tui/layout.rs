@@ -243,8 +243,8 @@ pub fn place(view: &mut Layout) {
     }
     for (id, component) in view.components.iter_mut().enumerate() {
         let incoming = view.edges.iter().filter(|edge| edge.to == id).count() as i32;
-        component.width = (component.title.len() as i32 + 3)
-            .max(component.description.len() as i32 + 3)
+        component.width = (component.title.len() as i32 + 4)
+            .max(component.description.len() as i32 + 4)
             .max(
                 component
                     .extra

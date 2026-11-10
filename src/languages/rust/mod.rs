@@ -7,7 +7,7 @@ use crate::analysis::{
     SourceRange, SourceRef, Symbol, SymbolKind,
 };
 use crate::git::{CapturedFile, CapturedSnapshot, SnapshotRole};
-use crate::languages::{DiscoveredUnit, Discovery, LanguageAdapter};
+use crate::languages::{DiscoveredUnit, Discovery, LanguageAdapter, is_test_path};
 use tree_sitter::{Node, Parser};
 
 pub struct RustAdapter;
@@ -30,6 +30,7 @@ struct Walker<'a> {
     bytes: &'a [u8],
     role: SnapshotRole,
     parsed: ParsedFile,
+    include_test: bool,
     order: usize,
 }
 impl Walker<'_> {
@@ -439,6 +440,13 @@ impl Walker<'_> {
         scope: usize,
         inherited: Availability,
     ) {
+        if !self.include_test
+            && attrs
+                .iter()
+                .any(|attr| discover::is_test_definition_attribute(*attr, self.bytes))
+        {
+            return;
+        }
         let availability = inherited.combine(self.availability(attrs));
         match node.kind() {
             "function_item" | "function_signature_item" => {
@@ -566,7 +574,23 @@ impl Walker<'_> {
                 range: Some(self.range(node)),
             });
         }
+        let mut attrs = Vec::new();
         for child in self.children(node) {
+            if matches!(child.kind(), "attribute_item" | "inner_attribute_item") {
+                attrs.push(child);
+                continue;
+            }
+            if !self.include_test
+                && attrs
+                    .iter()
+                    .any(|attr| discover::is_test_definition_attribute(*attr, self.bytes))
+            {
+                attrs.clear();
+                continue;
+            }
+            if child.is_named() && !self.is_doc(child) {
+                attrs.clear();
+            }
             self.errors(child);
         }
     }
@@ -579,14 +603,15 @@ impl LanguageAdapter for RustAdapter {
     fn accepts_metadata(&self, path: &[u8]) -> bool {
         path == b"Cargo.toml" || path.ends_with(b"/Cargo.toml")
     }
-    fn discover(&self, snapshot: &CapturedSnapshot) -> Discovery {
-        discover::discover(snapshot)
+    fn discover(&self, snapshot: &CapturedSnapshot, include_test: bool) -> Discovery {
+        discover::discover(snapshot, include_test)
     }
     fn extract(
         &self,
         file: &CapturedFile,
         role: SnapshotRole,
         unit: &DiscoveredUnit,
+        include_test: bool,
     ) -> ParsedFile {
         let mut parsed = ParsedFile {
             path: file.path.clone(),
@@ -601,6 +626,9 @@ impl LanguageAdapter for RustAdapter {
             calls: Vec::new(),
             diagnostics: Vec::new(),
         };
+        if !include_test && is_test_path(&file.path) {
+            return parsed;
+        }
         let bytes = &file.bytes;
         if std::str::from_utf8(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)).is_err() {
             parsed.valid = false;
@@ -701,9 +729,10 @@ impl LanguageAdapter for RustAdapter {
             role,
             parsed,
             order: 0,
+            include_test,
         };
         walker.errors(selected);
-        if selected.has_error() && walker.parsed.diagnostics.is_empty() {
+        if include_test && selected.has_error() && walker.parsed.diagnostics.is_empty() {
             walker.parsed.valid = false;
             walker.parsed.diagnostics.push(Diagnostic {
                 kind: DiagnosticKind::ParseError,
@@ -753,7 +782,7 @@ mod tests {
             conditional: false,
             unknown_attribute: false,
         };
-        RustAdapter.extract(&file, SnapshotRole::Target, &unit)
+        RustAdapter.extract(&file, SnapshotRole::Target, &unit, true)
     }
     fn extract(source: &str, subtree: Option<(usize, usize)>) -> ParsedFile {
         extract_unit(source, "crate", "Cargo.toml:lib:demo", subtree)

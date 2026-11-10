@@ -98,6 +98,7 @@ struct Walker<'a> {
     bytes: &'a [u8],
     path: Vec<u8>,
     role: SnapshotRole,
+    include_test: bool,
     parsed: ParsedFile,
     order: usize,
 }
@@ -136,6 +137,26 @@ impl Walker<'_> {
         let mut cursor = node.walk();
         node.children(&mut cursor).collect()
     }
+    fn is_excluded_definition(&self, node: Node<'_>) -> bool {
+        if self.include_test {
+            return false;
+        }
+        let inner = if node.kind() == "decorated_definition" {
+            node.child_by_field_name("definition")
+        } else {
+            Some(node)
+        };
+        inner.is_some_and(|inner| {
+            let prefix = match inner.kind() {
+                "function_definition" => b"test_".as_slice(),
+                "class_definition" => b"Test".as_slice(),
+                _ => return false,
+            };
+            inner
+                .child_by_field_name("name")
+                .is_some_and(|name| self.bytes[name.byte_range()].starts_with(prefix))
+        })
+    }
     fn canonical(
         &self,
         node: Node<'_>,
@@ -144,6 +165,9 @@ impl Walker<'_> {
         body: Option<usize>,
         in_body: bool,
     ) {
+        if self.is_excluded_definition(node) {
+            return;
+        }
         if node.kind() == "comment" {
             return;
         }
@@ -365,6 +389,9 @@ impl Walker<'_> {
         });
     }
     fn definition(&mut self, outer: Node<'_>, inner: Node<'_>, parent: usize) {
+        if self.is_excluded_definition(inner) {
+            return;
+        }
         let Some(name_node) = inner.child_by_field_name("name") else {
             return;
         };
@@ -544,6 +571,9 @@ impl Walker<'_> {
         }
     }
     fn errors(&mut self, node: Node<'_>) {
+        if self.is_excluded_definition(node) {
+            return;
+        }
         if node.is_error() || node.is_missing() {
             self.parsed.diagnostics.push(Diagnostic {
                 kind: DiagnosticKind::ParseError,
@@ -558,6 +588,64 @@ impl Walker<'_> {
         }
     }
 }
+
+// Only needed when a syntax error prevents tree-sitter from isolating a test definition.
+// Preserve line/byte offsets so production symbols still point into the captured source.
+fn mask_invalid_tests(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut masked = None;
+    let mut offset = 0;
+    let mut excluded_indent = None;
+    let mut decorators = Vec::new();
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let indent = line
+            .iter()
+            .take_while(|&&byte| byte == b' ' || byte == b'\t')
+            .count();
+        let content = &line[indent..];
+        let blank = content.iter().all(u8::is_ascii_whitespace);
+        if let Some(level) = excluded_indent {
+            if blank || indent > level {
+                let output = masked.get_or_insert_with(|| bytes.to_vec());
+                for byte in &mut output[offset..offset + line.len()] {
+                    if *byte != b'\n' && *byte != b'\r' {
+                        *byte = b' ';
+                    }
+                }
+                offset += line.len();
+                continue;
+            }
+            excluded_indent = None;
+        }
+        if content.starts_with(b"@") {
+            decorators.push((offset, line.len(), indent));
+        } else if content.starts_with(b"def test_")
+            || content.starts_with(b"async def test_")
+            || content.starts_with(b"class Test")
+        {
+            let output = masked.get_or_insert_with(|| bytes.to_vec());
+            for &(start, len, level) in &decorators {
+                if level == indent {
+                    for byte in &mut output[start..start + len] {
+                        if *byte != b'\n' && *byte != b'\r' {
+                            *byte = b' ';
+                        }
+                    }
+                }
+            }
+            for byte in &mut output[offset..offset + line.len()] {
+                if *byte != b'\n' && *byte != b'\r' {
+                    *byte = b' ';
+                }
+            }
+            excluded_indent = Some(indent);
+            decorators.clear();
+        } else if !blank && !content.starts_with(b"#") {
+            decorators.clear();
+        }
+        offset += line.len();
+    }
+    masked
+}
 impl LanguageAdapter for PythonAdapter {
     fn accepts_source(&self, path: &[u8]) -> bool {
         path.ends_with(b".py")
@@ -565,13 +653,11 @@ impl LanguageAdapter for PythonAdapter {
     fn accepts_metadata(&self, path: &[u8]) -> bool {
         path == b"pyproject.toml" || path.ends_with(b"/pyproject.toml")
     }
-    fn discover(&self, snapshot: &CapturedSnapshot) -> Discovery {
+    fn discover(&self, snapshot: &CapturedSnapshot, include_test: bool) -> Discovery {
         let mut discovery = Discovery::default();
-        for path in snapshot
-            .files
-            .keys()
-            .filter(|path| self.accepts_source(path))
-        {
+        for path in snapshot.files.keys().filter(|path| {
+            self.accepts_source(path) && (include_test || !crate::languages::is_test_path(path))
+        }) {
             let modules = python_module_candidates(snapshot, path);
             let module = (modules.len() == 1).then(|| modules[0].clone());
             if modules.len() > 1 {
@@ -606,6 +692,7 @@ impl LanguageAdapter for PythonAdapter {
         file: &CapturedFile,
         role: SnapshotRole,
         unit: &DiscoveredUnit,
+        include_test: bool,
     ) -> ParsedFile {
         let mut parsed = ParsedFile {
             unit: unit.key.clone(),
@@ -620,6 +707,9 @@ impl LanguageAdapter for PythonAdapter {
             calls: Vec::new(),
             diagnostics: Vec::new(),
         };
+        if !include_test && crate::languages::is_test_path(&file.path) {
+            return parsed;
+        }
         let bytes = &file.bytes;
         if std::str::from_utf8(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)).is_err() {
             parsed.valid = false;
@@ -655,6 +745,16 @@ impl LanguageAdapter for PythonAdapter {
             });
             return parsed;
         };
+        let masked = if !include_test && tree.root_node().has_error() {
+            mask_invalid_tests(bytes)
+        } else {
+            None
+        };
+        let tree = masked
+            .as_ref()
+            .and_then(|masked| parser.parse(masked, None))
+            .unwrap_or(tree);
+        let bytes = masked.as_deref().unwrap_or(bytes);
         let root = tree.root_node();
         parsed.scopes.push(Scope {
             id: 0,
@@ -683,12 +783,14 @@ impl LanguageAdapter for PythonAdapter {
             bytes,
             path: file.path.clone(),
             role,
+            include_test,
             parsed,
             order: 0,
         };
-        walker.parsed.valid = !root.has_error();
         walker.errors(root);
-        if root.has_error() && walker.parsed.diagnostics.is_empty() {
+        walker.parsed.valid = walker.parsed.diagnostics.is_empty();
+        if include_test && root.has_error() && walker.parsed.diagnostics.is_empty() {
+            walker.parsed.valid = false;
             walker.parsed.diagnostics.push(Diagnostic {
                 kind: DiagnosticKind::ParseError,
                 message: "Python syntax error".into(),

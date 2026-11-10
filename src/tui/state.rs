@@ -1,5 +1,5 @@
 use super::layout;
-use crate::analysis::SymbolChangeKind;
+use crate::analysis::{SymbolChangeKind, SymbolKind};
 use crate::cli::CompareMode;
 use crate::git::SnapshotRole;
 use crate::graph::{self, EdgeChangeKind, EndpointIdentity, GraphNode, Impact, SnapshotGraph};
@@ -604,8 +604,24 @@ impl<'a> App<'a> {
             .clamp(0, (self.layout.height - i32::from(viewport.height)).max(0));
     }
     fn node_box_title(&self, id: &str) -> String {
-        let (_, node) = self.native(id);
+        let (graph, node) = self.native(id);
         if let Some(symbol) = &node.symbol {
+            if matches!(symbol.kind, SymbolKind::Method | SymbolKind::AsyncMethod) {
+                let snapshot = match graph.role {
+                    SnapshotRole::Base => &self.session.base,
+                    SnapshotRole::Target => &self.session.target,
+                };
+                let owner = &snapshot.files[&symbol.unit].scopes[symbol.parent_scope].name;
+                let title = if let Some((trait_name, type_name)) = owner
+                    .strip_prefix("impl ")
+                    .and_then(|impl_name| impl_name.split_once(" for "))
+                {
+                    format!("<{type_name} as {trait_name}>.{}", symbol.name)
+                } else {
+                    format!("{owner}.{}", symbol.name)
+                };
+                return safe_text(&title);
+            }
             return safe_text(&symbol.name);
         }
         display_path(

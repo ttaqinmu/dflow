@@ -1,5 +1,6 @@
 use crate::analysis::{Diagnostic, DiagnosticKind, DiscoveredUnit, Discovery, SourceUnitKey};
 use crate::git::CapturedSnapshot;
+use crate::languages::is_test_path;
 use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::{Node, Parser};
 
@@ -60,12 +61,60 @@ type ModuleSources = BTreeMap<(String, String), (Vec<u8>, Option<(usize, usize)>
 
 struct Finder<'a> {
     snapshot: &'a CapturedSnapshot,
+    include_test: bool,
+    excluded_paths: BTreeSet<Vec<u8>>,
+    excluded_dirs: BTreeSet<Vec<u8>>,
     result: Discovery,
     visited: BTreeSet<SourceUnitKey>,
     modules: ModuleSources,
 }
 
 impl Finder<'_> {
+    fn exclude_module(
+        &mut self,
+        item: Node<'_>,
+        attrs: &[Node<'_>],
+        bytes: &[u8],
+        directory: &[u8],
+    ) {
+        let Some(name_node) = item.child_by_field_name("name") else {
+            return;
+        };
+        let Ok(name) = std::str::from_utf8(&bytes[name_node.byte_range()]) else {
+            return;
+        };
+        let module_dir = append(directory, name);
+        self.excluded_dirs.insert(module_dir.clone());
+        self.excluded_paths
+            .insert(append(directory, &format!("{name}.rs")));
+        self.excluded_paths.insert(append(&module_dir, "mod.rs"));
+        for attr in attrs {
+            if attribute_name(*attr, bytes) != Some("path") {
+                continue;
+            }
+            if let Some(value) = attr
+                .named_child(0)
+                .and_then(|attribute| attribute.child_by_field_name("value"))
+                .and_then(|value| literal_path(&bytes[value.byte_range()]))
+                .and_then(|path| relative_path(directory, &path))
+            {
+                self.excluded_dirs
+                    .insert(value.strip_suffix(b".rs").unwrap_or(&value).to_vec());
+                self.excluded_paths.insert(value);
+            }
+        }
+    }
+
+    fn excluded(&self, path: &[u8]) -> bool {
+        !self.include_test
+            && (is_test_path(path)
+                || self.excluded_paths.contains(path)
+                || self
+                    .excluded_dirs
+                    .iter()
+                    .any(|dir| path.starts_with(dir) && path.get(dir.len()) == Some(&b'/')))
+    }
+
     fn issue(&mut self, kind: DiagnosticKind, path: &[u8], message: impl Into<String>) {
         self.result.incomplete = true;
         self.result.diagnostics.push(Diagnostic {
@@ -235,6 +284,78 @@ impl Finder<'_> {
                 ));
             }
         }
+        if self.include_test {
+            if let Some(declarations) = value.get("test") {
+                if let Some(declarations) = declarations.as_array() {
+                    for declaration in declarations {
+                        let Some(declaration) = declaration.as_table() else {
+                            self.issue(
+                                DiagnosticKind::UnsupportedLayout,
+                                manifest_path,
+                                "[[test]] must be a table",
+                            );
+                            continue;
+                        };
+                        let path = declaration.get("path").and_then(toml::Value::as_str);
+                        let name = declaration
+                            .get("name")
+                            .and_then(toml::Value::as_str)
+                            .filter(|name| !name.is_empty())
+                            .or_else(|| {
+                                path.and_then(|path| path.rsplit('/').next()?.strip_suffix(".rs"))
+                            });
+                        let Some(name) = name else {
+                            self.issue(
+                                DiagnosticKind::UnsupportedLayout,
+                                manifest_path,
+                                "[[test]] needs a concrete name or .rs path",
+                            );
+                            continue;
+                        };
+                        let default = format!("tests/{name}.rs");
+                        targets.push((
+                            format!("test:{name}"),
+                            path.unwrap_or(&default).as_bytes().to_vec(),
+                            true,
+                        ));
+                    }
+                } else {
+                    self.issue(
+                        DiagnosticKind::UnsupportedLayout,
+                        manifest_path,
+                        "[[test]] must be an array of tables",
+                    );
+                }
+            }
+            if package.get("autotests").and_then(toml::Value::as_bool) != Some(false) {
+                let tests_dir = append(base, "tests");
+                for path in self.snapshot.files.keys() {
+                    let Some(relative) = path
+                        .strip_prefix(tests_dir.as_slice())
+                        .and_then(|relative| relative.strip_prefix(b"/"))
+                    else {
+                        continue;
+                    };
+                    let name = if !relative.contains(&b'/') {
+                        relative.strip_suffix(b".rs")
+                    } else {
+                        relative
+                            .strip_suffix(b"/main.rs")
+                            .filter(|name| !name.contains(&b'/'))
+                    };
+                    let Some(name) = name.and_then(|name| std::str::from_utf8(name).ok()) else {
+                        continue;
+                    };
+                    let target = format!("test:{name}");
+                    if !targets.iter().any(|(existing, _, _)| *existing == target) {
+                        let relative_path = path.strip_prefix(base).expect("captured package path");
+                        let relative_path =
+                            relative_path.strip_prefix(b"/").unwrap_or(relative_path);
+                        targets.push((target, relative_path.to_vec(), false));
+                    }
+                }
+            }
+        }
         let mut identities = BTreeSet::new();
         for (kind_name, path, explicit) in targets {
             if !identities.insert(kind_name.clone()) {
@@ -261,6 +382,9 @@ impl Finder<'_> {
                 );
                 continue;
             };
+            if self.excluded(&root) {
+                continue;
+            }
             if !self.snapshot.files.contains_key(&root) {
                 if explicit {
                     self.issue(
@@ -297,6 +421,9 @@ impl Finder<'_> {
         unknown_attribute: bool,
         mut active_files: Vec<Vec<u8>>,
     ) {
+        if self.excluded(&path) {
+            return;
+        }
         let key = SourceUnitKey {
             path: path.clone(),
             target: target.clone(),
@@ -368,7 +495,7 @@ impl Finder<'_> {
             return;
         };
         let root = tree.root_node();
-        if root.has_error() {
+        if self.include_test && root.has_error() {
             self.issue(
                 DiagnosticKind::ParseError,
                 &path,
@@ -428,6 +555,15 @@ impl Finder<'_> {
                     continue;
                 }
                 "mod_item" => {
+                    if !self.include_test
+                        && pending
+                            .iter()
+                            .any(|attr| is_cfg_test_attribute(*attr, bytes))
+                    {
+                        self.exclude_module(item, &pending, bytes, &directory);
+                        pending.clear();
+                        continue;
+                    }
                     let module_conditional = inherited_conditional
                         || pending.iter().any(|attr| {
                             matches!(attribute_name(*attr, bytes), Some("cfg" | "cfg_attr"))
@@ -642,6 +778,33 @@ fn uncertain_attribute(name: Option<&str>) -> bool {
     )
 }
 
+pub(super) fn is_cfg_test_attribute(item: Node<'_>, bytes: &[u8]) -> bool {
+    if attribute_name(item, bytes) != Some("cfg") {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(&bytes[item.byte_range()]) else {
+        return false;
+    };
+    text.trim_start_matches('#')
+        .trim_start_matches('!')
+        .trim_start()
+        .strip_prefix('[')
+        .and_then(|text| text.strip_suffix(']'))
+        .map(str::trim)
+        .and_then(|text| text.strip_prefix("cfg"))
+        .map(str::trim_start)
+        .and_then(|text| text.strip_prefix('('))
+        .and_then(|text| text.strip_suffix(')'))
+        .is_some_and(|condition| condition.trim() == "test")
+}
+
+pub(super) fn is_test_definition_attribute(item: Node<'_>, bytes: &[u8]) -> bool {
+    if is_cfg_test_attribute(item, bytes) {
+        return true;
+    }
+    attribute_name(item, bytes).is_some_and(|name| name == "test" || name.ends_with("::test"))
+}
+
 fn attribute_name<'a>(item: Node<'_>, bytes: &'a [u8]) -> Option<&'a str> {
     let attr = item.named_child(0)?;
     let name = attr.named_child(0)?;
@@ -666,7 +829,7 @@ fn literal_path(value: &[u8]) -> Option<String> {
     Some(raw.to_owned())
 }
 
-pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
+pub(super) fn discover(snapshot: &CapturedSnapshot, include_test: bool) -> Discovery {
     if !snapshot
         .files
         .keys()
@@ -677,6 +840,9 @@ pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
     let mut finder = Finder {
         snapshot,
         result: Discovery::default(),
+        include_test,
+        excluded_paths: BTreeSet::new(),
+        excluded_dirs: BTreeSet::new(),
         visited: BTreeSet::new(),
         modules: BTreeMap::new(),
     };
@@ -740,7 +906,10 @@ pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
                 "Cargo manifest is not a literal root workspace member",
             );
         }
-        if path.ends_with(b".rs") && !finder.visited.iter().any(|key| &key.path == path) {
+        if path.ends_with(b".rs")
+            && !finder.excluded(path)
+            && !finder.visited.iter().any(|key| &key.path == path)
+        {
             finder.issue(
                 DiagnosticKind::UnsupportedLayout,
                 path,
@@ -795,7 +964,7 @@ mod tests {
             ("member/src/hidden/child.rs", "pub fn leaf() {}\n"),
             ("member/src/other.rs", "pub fn other() {}\n"),
         ]);
-        let result = discover(&snapshot);
+        let result = discover(&snapshot, true);
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         assert!(!result.incomplete);
         assert_eq!(result.units.len(), 8);
@@ -843,7 +1012,7 @@ mod tests {
             ("src/both/mod.rs", ""),
             ("src/loose.rs", ""),
         ]);
-        let result = discover(&snapshot);
+        let result = discover(&snapshot, true);
         assert!(result.incomplete);
         assert!(
             result
@@ -877,7 +1046,7 @@ mod tests {
             ("Cargo.toml", "[workspace]\nmembers = [\"member*\"]\n"),
             ("src/lib.rs", "pub fn unrelated() {}"),
         ]);
-        assert!(discover(&bad).incomplete);
+        assert!(discover(&bad, true).incomplete);
         let bad = captured(&[
             (
                 "Cargo.toml",
@@ -886,7 +1055,7 @@ mod tests {
             ("src/lib.rs", "pub fn unrelated() {}"),
         ]);
         assert!(
-            discover(&bad)
+            discover(&bad, true)
                 .diagnostics
                 .iter()
                 .any(|d| d.message.contains("concrete string"))
@@ -899,14 +1068,14 @@ mod tests {
             ("src/lib.rs", "pub fn unrelated() {}"),
         ]);
         assert!(
-            discover(&bad)
+            discover(&bad, true)
                 .diagnostics
                 .iter()
                 .any(|d| d.message.contains("escapes repository"))
         );
         let bad = captured(&[("Cargo.toml", "[package\nname = \"x\""), ("src/lib.rs", "")]);
         assert!(
-            discover(&bad)
+            discover(&bad, true)
                 .diagnostics
                 .iter()
                 .any(|d| d.message.contains("invalid Cargo manifest"))

@@ -39,18 +39,23 @@ fn main() {
         Some(dir) => cwd.join(dir),
         None => cwd,
     };
-    match git::capture_comparison(&cli.mode, discovery_dir.clone()) {
+    match git::capture_comparison(&cli.mode, discovery_dir.clone(), cli.include_test) {
         Ok(capture) => {
-            let session = report::AnalysisSession::new(capture);
+            let session = report::AnalysisSession::new(capture, cli.include_test);
             if matches!(format, OutputFormat::Tui) {
-                let complete =
-                    match tui::run(session, &cli.mode, options.depth as usize, discovery_dir) {
-                        Ok(complete) => complete,
-                        Err(error) => {
-                            eprintln!("terminal UI error: {error}");
-                            std::process::exit(1);
-                        }
-                    };
+                let complete = match tui::run(
+                    session,
+                    &cli.mode,
+                    options.depth as usize,
+                    discovery_dir,
+                    cli.include_test,
+                ) {
+                    Ok(complete) => complete,
+                    Err(error) => {
+                        eprintln!("terminal UI error: {error}");
+                        std::process::exit(1);
+                    }
+                };
                 std::process::exit(if complete { 0 } else { 1 });
             }
             let value = session.report(&cli.mode, options.depth as usize);

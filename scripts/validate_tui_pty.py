@@ -167,7 +167,6 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
             image = canvas(screen)
             for title in canvas_titles:
                 assert title in image, f"unrelated changed root {title!r} was not visible on initial screen"
-            assert any(f"*{title}" in image for title in canvas_titles), "selected graph title was not marked"
             assert "complete" in image
             assert "base " in image and "target " in image, "both snapshot identities were not shown"
         if edge_glyphs:
@@ -207,10 +206,7 @@ def run_case(binary: Path, root: Path, *, marker: bytes | None, keys: bytes = b"
             image = canvas(screen)
             for title in canvas_titles:
                 assert title in image, f"changed root {title!r} disappeared after depth refresh"
-            before_selection = re.findall(r"\*([^ │\n]+)", image)
             output += input_and_redraw(master, process, screen, b"j", None)
-            after_selection = re.findall(r"\*([^ │\n]+)", canvas(screen))
-            assert len(before_selection) == len(after_selection) == 1 and before_selection != after_selection, "graph selection marker did not move with j"
         if resize:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 100, 0, 0))
             screen.resize(100, 20)

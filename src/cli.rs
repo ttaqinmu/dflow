@@ -5,6 +5,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 pub struct Cli {
     #[arg(long, global = true, value_name = "DIR")]
     pub dir: Option<std::path::PathBuf>,
+    #[arg(long, global = true)]
+    pub include_test: bool,
     #[command(subcommand)]
     pub mode: CompareMode,
 }

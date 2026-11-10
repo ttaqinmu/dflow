@@ -15,9 +15,9 @@ pub struct AnalysisSession {
     pub edge_comparison: graph::EdgeComparison,
 }
 impl AnalysisSession {
-    pub fn new(capture: CaptureResult) -> Self {
-        let base = analysis::extract_snapshot(&capture.pair.base);
-        let target = analysis::extract_snapshot(&capture.pair.target);
+    pub fn new(capture: CaptureResult, include_test: bool) -> Self {
+        let base = analysis::extract_snapshot(&capture.pair.base, include_test);
+        let target = analysis::extract_snapshot(&capture.pair.target, include_test);
         let mut changes = analysis::classify_symbols(&base, &target);
         let base_graph = graph::build(&base);
         let target_graph = graph::build(&target);
@@ -186,14 +186,17 @@ mod tests {
         }
     }
     fn session(base: &[(&[u8], &[u8])], target: &[(&[u8], &[u8])]) -> AnalysisSession {
-        AnalysisSession::new(CaptureResult {
-            pair: SnapshotPair {
-                base: snapshot(SnapshotRole::Base, base),
-                target: snapshot(SnapshotRole::Target, target),
+        AnalysisSession::new(
+            CaptureResult {
+                pair: SnapshotPair {
+                    base: snapshot(SnapshotRole::Base, base),
+                    target: snapshot(SnapshotRole::Target, target),
+                },
+                changes: Vec::<FileChange>::new(),
+                diagnostics: vec![],
             },
-            changes: Vec::<FileChange>::new(),
-            diagnostics: vec![],
-        })
+            true,
+        )
     }
     fn mode() -> CompareMode {
         CompareMode::Local(LocalArgs {

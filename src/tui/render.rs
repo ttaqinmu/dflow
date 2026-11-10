@@ -5,7 +5,7 @@ use crate::git::CapturedSnapshot;
 use crate::graph::EdgeChangeKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use std::collections::BTreeMap;
@@ -252,7 +252,6 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
                 .map(change_style)
                 .unwrap_or(normal)
         };
-        // Reserve a marker column for every title so selection never shifts the text.
         let right = component.x + component.width - 1;
         let bottom = component.y + component.height - 1;
         let fill_left = (component.x + 1).max(app.pan_x);
@@ -303,17 +302,6 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
             );
             put(buf, area, right, y, (app.pan_x, app.pan_y), "│", base_style);
         }
-        if selected {
-            put(
-                buf,
-                area,
-                component.x + 1,
-                component.y + 1,
-                (app.pan_x, app.pan_y),
-                "*",
-                base_style,
-            );
-        }
         put_text(
             buf,
             area,
@@ -321,7 +309,11 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
             component.y + 1,
             (app.pan_x, app.pan_y),
             &component.title,
-            base_style,
+            if selected {
+                base_style.add_modifier(Modifier::BOLD)
+            } else {
+                base_style
+            },
         );
         for x in component.x + 1..right {
             put(
@@ -341,7 +333,7 @@ fn draw_graph(app: &App<'_>, buf: &mut Buffer, area: Rect) {
             component.y + 3,
             (app.pan_x, app.pan_y),
             &component.description,
-            base_style,
+            base_style.add_modifier(Modifier::DIM),
         );
         for (row, text) in component.edge_labels.iter().enumerate() {
             let style = if text.starts_with("+ ") {

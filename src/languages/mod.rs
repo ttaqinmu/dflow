@@ -8,9 +8,14 @@ pub trait LanguageAdapter {
     fn accepts_metadata(&self, _path: &[u8]) -> bool {
         false
     }
-    fn discover(&self, snapshot: &CapturedSnapshot) -> Discovery;
-    fn extract(&self, file: &CapturedFile, role: SnapshotRole, unit: &DiscoveredUnit)
-    -> ParsedFile;
+    fn discover(&self, snapshot: &CapturedSnapshot, include_test: bool) -> Discovery;
+    fn extract(
+        &self,
+        file: &CapturedFile,
+        role: SnapshotRole,
+        unit: &DiscoveredUnit,
+        include_test: bool,
+    ) -> ParsedFile;
 }
 pub(crate) fn adapters() -> Vec<Box<dyn LanguageAdapter>> {
     vec![Box::new(python::PythonAdapter), Box::new(rust::RustAdapter)]
@@ -20,6 +25,21 @@ pub fn capture_path(path: &[u8]) -> bool {
     adapters()
         .iter()
         .any(|adapter| adapter.accepts_source(path) || adapter.accepts_metadata(path))
+}
+
+/// Conventional test-only paths in either supported language.
+pub fn is_test_path(path: &[u8]) -> bool {
+    if path
+        .split(|byte| *byte == b'/')
+        .any(|part| part == b"tests" || part == b"test" || part == b"__tests__")
+    {
+        return true;
+    }
+    let name = path.rsplit(|byte| *byte == b'/').next().unwrap_or(path);
+    (name.ends_with(b".py")
+        && (name.starts_with(b"test_") || name.ends_with(b"_test.py") || name == b"conftest.py"))
+        || (name.ends_with(b".rs")
+            && (name.starts_with(b"test_") || name.ends_with(b"_test.rs") || name == b"tests.rs"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

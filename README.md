@@ -74,19 +74,20 @@ cargo run -- local
 cargo run -- local --staged
 cargo run -- local --unstaged
 cargo run -- branch --base main --target feature
-cargo run -- local --format json --depth 2
+cargo run -- local --format json --depth 2 --include-test
 cargo run -- --dir ../other-repo local
 cargo run -- branch --base main --target feature --dir ../other-repo
 ```
 
 `--dir DIR` selects the starting directory for Git repository discovery in either mode. Relative paths resolve against the process current directory, not the repository root; paths inside a repository work because discovery ascends to its root. Without `--dir`, discovery starts at the process current directory. A missing or non-repository directory is invalid input (exit 2).
+`--include-test` is off by default in both modes and can appear before or after the subcommand. Without it, conventional Python test files (`test_*.py`, `*_test.py`, `conftest.py`), Rust test files (`test_*.rs`, `*_test.rs`, `tests.rs`), and files under `test/`, `tests/`, or `__tests__/` are omitted. Test-named Python definitions (`test_*` and `Test*` classes) and Rust `#[test]`/`#[cfg(test)]` code within other source files are also omitted. With the flag, those files and definitions participate in both JSON reports and the TUI, including live reloads.
 If both stdin and stdout are terminals, the default output is an interactive graph. Otherwise the default is JSON. `--format json` always writes one JSON object to stdout; `--format tui` requires both terminals. Exit status is 0 for complete analysis, 1 for partial analysis or operational failure, and 2 for invalid input. A parse error produces a partial report, while an unresolved call by itself does not.
 
 Local TUI comparisons reload Git snapshots automatically when relevant source, ignore rules, index, or branch metadata changes; no keypress or restart is needed. Combined/unstaged mode observes worktree edits; `--staged` observes only committed/index changes. The TUI retains its last valid graph and displays `RELOAD ERROR` if a recapture fails, then clears the error after recovery. Invalid source is shown as partial analysis until repaired. Quitting with a remaining reload error exits 1. Branch comparisons stay fixed at their initially captured commit tips, and JSON output remains a one-shot report.
 
 ### Terminal controls
 
-The terminal has two persistent areas: a DFlow information header showing both snapshot identities, caller depth, analysis completeness, and counts, above one full-width graph canvas. All changed symbols appear together, with unrelated caller graphs as separate islands and shared callers shown once. Each symbol box shows only its function name as the title and its worktree-relative path on the next line (module boxes use the module filename as the title), and sizes to its content rather than truncating it. Press `d` to expand or collapse details inside the selected graph node, including snapshot-labeled source and call-site evidence where available; there is no separate Details panel. Expanded boxes can be wider than the viewport, so pan to see their full contents. Shared routes meet at junctions; panning clips the graph without breaking visible joins. Deleted roots and their callers use the **base** snapshot; added and modified roots use **target**. A partial analysis is visibly marked.
+The terminal has two persistent areas: a DFlow information header showing both snapshot identities, caller depth, analysis completeness, and counts, above one full-width graph canvas. All changed symbols appear together, with unrelated caller graphs as separate islands and shared callers shown once. Each symbol box shows its function name as the title, prefixed by the class, struct, or trait name for methods (trait implementations use `<Type as Trait>.method`), and its worktree-relative path on the next line (module boxes use the module filename as the title), with one blank cell between each label and the box edges and dimmed paths. Boxes size to their content rather than truncating it. Press `d` to expand or collapse details inside the selected graph node, including snapshot-labeled source and call-site evidence where available; there is no separate Details panel. Expanded boxes can be wider than the viewport, so pan to see their full contents. Shared routes meet at junctions; panning clips the graph without breaking visible joins. Deleted roots and their callers use the **base** snapshot; added and modified roots use **target**. A partial analysis is visibly marked.
 
 Connectors detour around intervening node boxes, so a direct call remains visible even when its source and target are separated by another node.
 
@@ -100,7 +101,7 @@ Connectors detour around intervening node boxes, so a direct call remains visibl
 | `?` | Show or close help |
 | `q` or Ctrl-C | Quit |
 
-The terminal needs at least 60 columns and 12 rows. Narrower terminals show resize guidance. Renderer-owned box-drawing lines and arrows are single-cell Unicode glyphs. Added roots are green, deleted roots red, and modified roots yellow; roots with multiple change kinds have a distinct mixed style. Unchanged callers and connectors retain the terminal default color. A `*` immediately before the selected node's title marks selection without changing its color.
+The terminal needs at least 60 columns and 12 rows. Narrower terminals show resize guidance. Renderer-owned box-drawing lines and arrows are single-cell Unicode glyphs. Added roots are green, deleted roots red, and modified roots yellow; roots with multiple change kinds have a distinct mixed style. Unchanged callers and connectors retain the terminal default color. The selected node's title is bold without changing its color.
 
 Run the current test suite with:
 

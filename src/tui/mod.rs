@@ -76,6 +76,7 @@ pub fn run(
     mode: &CompareMode,
     depth: usize,
     discovery_dir: PathBuf,
+    include_test: bool,
 ) -> io::Result<bool> {
     let mut app = state::App::new(session, mode, depth);
     let mut watch = watch::ReloadWatch::new(mode, &discovery_dir);
@@ -135,10 +136,10 @@ pub fn run(
                 }
             }
             if watch.should_capture(Instant::now()) {
-                match git::capture_comparison(mode, discovery_dir.clone()) {
+                match git::capture_comparison(mode, discovery_dir.clone(), include_test) {
                     Ok(capture) => {
                         if !same_capture(&capture, &app.session.capture) {
-                            app.replace_session(AnalysisSession::new(capture));
+                            app.replace_session(AnalysisSession::new(capture, include_test));
                             redraw = true;
                         } else if app.reload_error.take().is_some() {
                             redraw = true;
@@ -200,14 +201,17 @@ mod tests {
         }
     }
     fn session(base: &[(&[u8], &[u8])], target: &[(&[u8], &[u8])]) -> AnalysisSession {
-        AnalysisSession::new(CaptureResult {
-            pair: SnapshotPair {
-                base: snapshot(SnapshotRole::Base, base),
-                target: snapshot(SnapshotRole::Target, target),
+        AnalysisSession::new(
+            CaptureResult {
+                pair: SnapshotPair {
+                    base: snapshot(SnapshotRole::Base, base),
+                    target: snapshot(SnapshotRole::Target, target),
+                },
+                changes: vec![],
+                diagnostics: vec![],
             },
-            changes: vec![],
-            diagnostics: vec![],
-        })
+            true,
+        )
     }
     fn mode() -> CompareMode {
         CompareMode::Local(LocalArgs {
@@ -244,8 +248,8 @@ mod tests {
             .nth(y)
             .unwrap()
             .chars()
-            .skip(x + if row == 1 || row == 3 { 2 } else { 1 })
-            .take((component.width - if row == 1 || row == 3 { 3 } else { 2 }) as usize)
+            .skip(x + 2)
+            .take((component.width - 3) as usize)
             .collect::<String>()
             .trim_end()
             .to_owned()
@@ -561,23 +565,13 @@ mod tests {
                     .modifier
                     .intersects(Modifier::BOLD | Modifier::REVERSED)
             );
-            let marker = &buffer[((2 + component.x) as u16, (6 + component.y) as u16)];
-            assert_eq!(marker.symbol(), "*");
-            assert_eq!(marker.fg, color);
-            assert!(
-                !marker
-                    .modifier
-                    .intersects(Modifier::BOLD | Modifier::REVERSED)
-            );
-            let title = &buffer[((3 + component.x) as u16, (6 + component.y) as u16)];
-            assert_eq!(title.fg, color);
-            assert!(
-                !title
-                    .modifier
-                    .intersects(Modifier::BOLD | Modifier::REVERSED)
-            );
-            let description = &buffer[((2 + component.x) as u16, (8 + component.y) as u16)];
+            let title_cell = &buffer[((3 + component.x) as u16, (6 + component.y) as u16)];
+            assert_eq!(title_cell.symbol(), &title[..1]);
+            assert_eq!(title_cell.fg, color);
+            assert!(title_cell.modifier.contains(Modifier::BOLD));
+            let description = &buffer[((3 + component.x) as u16, (8 + component.y) as u16)];
             assert_eq!(description.fg, color);
+            assert!(description.modifier.contains(Modifier::DIM));
             assert!(
                 !description
                     .modifier
@@ -604,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_graph_marker_follows_navigation() {
+    fn selected_graph_title_follows_navigation() {
         let target = [(
             b"a.py".as_slice(),
             b"def f(): pass\ndef g(): f()\n".as_slice(),
@@ -622,25 +616,13 @@ mod tests {
                     .selected_node
                     .as_ref()
                     .is_some_and(|id| component.members.contains(id));
-                let marker_x = (2 + component.x - app.pan_x) as u16;
-                let title_x = marker_x + 1;
+                let title_x = (3 + component.x - app.pan_x) as u16;
                 let y = (6 + component.y - app.pan_y) as u16;
-                let marker = &buffer[(marker_x, y)];
-                assert_eq!(marker.symbol(), if selected { "*" } else { " " });
-                assert_eq!(marker.fg, Color::Green);
-                assert!(
-                    !marker
-                        .modifier
-                        .intersects(Modifier::BOLD | Modifier::REVERSED)
-                );
                 let title = &buffer[(title_x, y)];
                 assert_eq!(title.symbol(), &component.title[..1]);
                 assert_eq!(title.fg, Color::Green);
-                assert!(
-                    !title
-                        .modifier
-                        .intersects(Modifier::BOLD | Modifier::REVERSED)
-                );
+                assert_eq!(title.modifier.contains(Modifier::BOLD), selected);
+                assert!(!title.modifier.contains(Modifier::REVERSED));
                 let padding = &buffer[(title_x + component.title.len() as u16, y)];
                 assert_eq!(padding.symbol(), " ");
                 assert_eq!(padding.fg, Color::Green);
@@ -649,7 +631,7 @@ mod tests {
                         .modifier
                         .intersects(Modifier::BOLD | Modifier::REVERSED)
                 );
-                for &(cell_x, cell_y) in &[(marker_x - 1, y - 1), (marker_x, y + 2)] {
+                for &(cell_x, cell_y) in &[(title_x - 1, y - 1), (title_x, y + 2)] {
                     let cell = &buffer[(cell_x, cell_y)];
                     assert_eq!(cell.fg, Color::Green);
                     assert!(
@@ -659,7 +641,7 @@ mod tests {
                     );
                 }
                 if !component.extra.is_empty() {
-                    let detail = &buffer[(marker_x, y + 4)];
+                    let detail = &buffer[(title_x, y + 4)];
                     assert_eq!(detail.fg, Color::Green);
                     assert!(
                         !detail
