@@ -265,6 +265,7 @@ impl Walker<'_> {
             direct_fingerprint: direct.finish(),
             non_call_fingerprint: non_call.finish(),
             decorated: false,
+            property: false,
             conditional: availability.conditional,
             unknown_attribute: availability.unknown_attribute,
         });

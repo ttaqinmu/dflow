@@ -303,6 +303,93 @@ fn binary_branch_mode_uses_diverged_tips_even_with_dirty_files() {
 }
 
 #[test]
+fn property_getter_read_from_imported_instance_has_caller_edge() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    write(dir.path(), "service.py", "class Service:\n    pass\n");
+    write(
+        dir.path(),
+        "entry.py",
+        "from service import Service\n\ndef entry():\n    obj = Service()\n    return obj.value\n\ndef write_only():\n    obj = Service()\n    obj.value = 1\n\ndef rebound():\n    obj = Service()\n    obj = object()\n    return obj.value\n",
+    );
+    commit(&repo, &["service.py", "entry.py"]);
+    write(
+        dir.path(),
+        "service.py",
+        "class Service:\n    @property\n    def value(self):\n        return 42\n",
+    );
+    let report = json(&run(dir.path(), &["local", "--format", "json"]), 0);
+    let getter = symbol_id(&report, "value", "target");
+    let caller = symbol_id(&report, "entry", "target");
+    assert!(
+        impact(&report, getter)["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|edge| { edge["caller"] == caller && edge["callee"] == getter }),
+        "{:#}",
+        impact(&report, getter)
+    );
+    let nodes = impact(&report, getter)["nodes"].as_array().unwrap();
+    for name in ["write_only", "rebound"] {
+        let id = symbol_id(&report, name, "target");
+        assert!(
+            !nodes.iter().any(|node| node["id"] == id),
+            "{name} is not a getter caller"
+        );
+    }
+}
+
+#[test]
+fn annotated_method_receivers_trace_imported_and_local_callers() {
+    let dir = TempDir::new().unwrap();
+    let repo = Repository::init(dir.path()).unwrap();
+    write(
+        dir.path(),
+        "app/model.py",
+        "from typing import Optional\nclass Rate:\n    pass\nclass Transaction:\n    def apply(self, rate: Optional[\"Rate\"]):\n        return rate.sell(1)\n\ndef local(rate: Rate):\n    return rate.sell(1)\n",
+    );
+    write(
+        dir.path(),
+        "app/entry.py",
+        "from typing import Optional\nfrom model import Rate\n\ndef direct(rate: Rate):\n    return rate.sell(1)\n\ndef optional(rate: Optional[Rate]):\n    if rate is None:\n        return None\n    return sum(rate.sell(n) for n in [1, 2])\n\ndef unknown(rate):\n    return rate.sell(1)\n\ndef rebound(rate: Rate):\n    rate = object()\n    return rate.sell(1)\n",
+    );
+    write(
+        dir.path(),
+        "app/pyproject.toml",
+        "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    );
+    commit(
+        &repo,
+        &["app/pyproject.toml", "app/model.py", "app/entry.py"],
+    );
+    write(
+        dir.path(),
+        "app/model.py",
+        "from typing import Optional\nclass Rate:\n    def sell(self, amount):\n        return amount\nclass Transaction:\n    def apply(self, rate: Optional[\"Rate\"]):\n        return rate.sell(1)\n\ndef local(rate: Rate):\n    return rate.sell(1)\n",
+    );
+    let report = json(&run(dir.path(), &["local", "--format", "json"]), 0);
+    let getter = symbol_id(&report, "sell", "target");
+    let nodes = impact(&report, getter)["nodes"].as_array().unwrap();
+    for name in ["local", "direct", "optional", "apply"] {
+        let id = symbol_id(&report, name, "target");
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node["id"] == id && node["depth"] == 1),
+            "{name} missing"
+        );
+    }
+    for name in ["unknown", "rebound"] {
+        let id = symbol_id(&report, name, "target");
+        assert!(
+            !nodes.iter().any(|node| node["id"] == id),
+            "{name} must remain unresolved"
+        );
+    }
+}
+
+#[test]
 fn binary_reports_modified_added_deleted_and_unchanged_callers() {
     let dir = TempDir::new().unwrap();
     let repo = Repository::init(dir.path()).unwrap();

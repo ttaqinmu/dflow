@@ -273,6 +273,9 @@ impl<'a> RustIndex<'a> {
         let path = match &call.target {
             CallTarget::Name(name) => vec![name.as_str()],
             CallTarget::Qualified(parts) => parts.iter().map(String::as_str).collect(),
+            CallTarget::Property { .. } | CallTarget::TypedMethod { .. } => {
+                return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
+            }
             CallTarget::Dynamic => return Resolution::Unresolved(UnresolvedReason::DynamicTarget),
         };
         if path.is_empty() {
@@ -481,6 +484,7 @@ mod tests {
             direct_fingerprint: String::new(),
             non_call_fingerprint: String::new(),
             decorated: false,
+            property: false,
             conditional: false,
             unknown_attribute: false,
         });

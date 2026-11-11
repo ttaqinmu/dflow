@@ -59,9 +59,9 @@ This is a conceptual boundary. The current implementation stays in one Rust crat
 - [x] Export focused Mermaid and Graphviz DOT diagrams from the shared caller graph.
 - [ ] Prototype a Zed workflow using the same core analysis.
 
-Python support focuses on local calls and explicit imports. Method dispatch, dynamic imports, decorators, and runtime-generated calls require additional analysis and may remain unresolved.
+Python support focuses on local calls and explicit imports. A read of `obj.value` traces to a `@property` getter when `obj` has exactly one local assignment from a directly imported or local class constructor (`obj = Service()`). Calls on a parameter annotated with a unique local or directly imported class (`Rate` or `Optional[Rate]`, including quoted forward references) trace to an undecorated method of that class when the parameter is not rebound. These annotation-based edges assume the declared type; Python can pass subclasses or different objects at runtime. Untyped/reassigned receivers, property writes, other decorators, dynamic imports, and runtime-generated calls remain unresolved.
 
-Supported Python resolution covers direct lexical calls, explicit repository imports, aliases, known relative imports, and module-qualified calls where the binding is certain. Parameters, assignments, wildcard imports, uncertain package attributes, decorators, and dynamic dispatch remain unresolved rather than creating guessed edges. Rust resolves lexical free/nested functions, explicit `crate`/`self`/`super` module paths, static `use` aliases, and unique inherent associated functions within one crate target. Receiver/trait/UFCS dispatch, macro expansion, glob imports, re-exports, conditional compilation, unknown procedural attributes, external crates, and ambiguous bindings stay unresolved. JSON `unresolved_reason` is an open string field; [schema v2](docs/report-schema-v2.md) documents its meanings. Neither language is executed.
+Supported Python resolution covers direct lexical calls, explicit repository imports, aliases, known relative imports, module-qualified calls, and the constrained member cases above. A nested directory containing `pyproject.toml` also serves as a module root, so imports within that project can resolve even when the Git repository root is its parent. Other assignments, wildcard imports, uncertain package attributes, decorators, and dynamic dispatch remain unresolved rather than creating guessed edges. Rust resolves lexical free/nested functions, explicit `crate`/`self`/`super` module paths, static `use` aliases, and unique inherent associated functions within one crate target. Receiver/trait/UFCS dispatch, macro expansion, glob imports, re-exports, conditional compilation, unknown procedural attributes, external crates, and ambiguous bindings stay unresolved. JSON `unresolved_reason` is an open string field; [schema v2](docs/report-schema-v2.md) documents its meanings. Neither language is executed.
 
 ## Development
 
@@ -105,7 +105,7 @@ Connectors detour around intervening node boxes, so a direct call remains visibl
 | `?` | Show or close help |
 | `q` or Ctrl-C | Quit |
 
-The terminal needs at least 60 columns and 12 rows. Narrower terminals show resize guidance. Renderer-owned box-drawing lines and arrows are single-cell Unicode glyphs. Added roots are green, deleted roots red, and modified roots yellow; roots with multiple change kinds have a distinct mixed style. Unchanged callers and connectors retain the terminal default color. The selected node's title is bold without changing its color.
+The graph renders in small terminals, including mobile SSH viewports; pan to inspect clipped nodes. A terminal smaller than 3 columns or 7 rows has no room for even one bordered graph cell and shows resize guidance. Renderer-owned box-drawing lines and arrows are single-cell Unicode glyphs. Added roots are green, deleted roots red, and modified roots yellow; roots with multiple change kinds have a distinct mixed style. Unchanged callers and connectors retain the terminal default color. The selected node's title is bold without changing its color.
 
 Run the current test suite with:
 

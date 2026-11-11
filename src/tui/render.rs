@@ -404,8 +404,10 @@ pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
         );
         return;
     }
-    if area.width < 60 || area.height < 12 {
-        frame.render_widget(Paragraph::new("Terminal too small for graph. Resize to at least 60x12. Press q to quit or ? for help.").block(panel("")).wrap(Wrap { trim: false }), area);
+    // Only require room for a bordered graph cell below the status header.
+    // Smaller viewports remain navigable by panning rather than hiding the graph.
+    if area.width < 3 || area.height < HEADER_HEIGHT + 3 {
+        frame.render_widget(Paragraph::new("Terminal too small for graph. Press q to quit or ? for help.").block(panel("")).wrap(Wrap { trim: false }), area);
         return;
     }
     let vertical = Layout::default()

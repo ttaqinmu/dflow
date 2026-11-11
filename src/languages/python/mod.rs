@@ -32,13 +32,18 @@ fn configured_source_root(snapshot: &CapturedSnapshot) -> Option<Result<&'static
     }
 }
 
-fn python_module_candidates(snapshot: &CapturedSnapshot, path: &[u8]) -> Vec<String> {
+fn python_module_candidates(
+    snapshot: &CapturedSnapshot,
+    path: &[u8],
+    prefixes: &[Vec<u8>],
+) -> Vec<String> {
     if !path.ends_with(b".py") {
         return Vec::new();
     }
     let mut candidates = Vec::new();
     let configured = configured_source_root(snapshot);
-    for prefix in [b"".as_slice(), b"src/".as_slice()] {
+    for candidate in prefixes {
+        let prefix = candidate.as_slice();
         if matches!(configured, Some(Err(()))) {
             return Vec::new();
         }
@@ -101,6 +106,9 @@ struct Walker<'a> {
     include_test: bool,
     parsed: ParsedFile,
     order: usize,
+    instances: Vec<(usize, String, String, usize)>,
+    property_reads: Vec<(usize, String, String, SourceRef)>,
+    typed_parameters: Vec<(usize, String, String)>,
 }
 impl Walker<'_> {
     fn range(&self, node: Node<'_>) -> SourceRange {
@@ -253,6 +261,20 @@ impl Walker<'_> {
             for name in names {
                 self.add_binding(scope_id, name, BindingKind::Assignment, left);
             }
+            if node.kind() == "assignment" && left.kind() == "identifier" {
+                if let Some(right) = node.child_by_field_name("right")
+                    && right.kind() == "call"
+                    && let Some(function) = right.child_by_field_name("function")
+                    && function.kind() == "identifier"
+                {
+                    self.instances.push((
+                        scope_id,
+                        self.text(left),
+                        self.text(function),
+                        node.start_byte(),
+                    ));
+                }
+            }
         }
     }
     fn add_parameters(&mut self, node: Node<'_>, scope_id: usize) {
@@ -267,6 +289,35 @@ impl Walker<'_> {
                 };
                 if let Some(name) = name {
                     self.add_binding(scope_id, self.text(name), BindingKind::Parameter, name);
+                    if let Some(annotation) = param.child_by_field_name("type") {
+                        let text = self.text(annotation);
+                        let text = text.trim();
+                        let class = text
+                            .strip_prefix("Optional[")
+                            .and_then(|inner| inner.strip_suffix(']'))
+                            .unwrap_or(text)
+                            .trim();
+                        let class = class
+                            .strip_prefix('"')
+                            .and_then(|inner| inner.strip_suffix('"'))
+                            .or_else(|| {
+                                class
+                                    .strip_prefix('\'')
+                                    .and_then(|inner| inner.strip_suffix('\''))
+                            })
+                            .unwrap_or(class);
+                        if !class.is_empty()
+                            && class
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                        {
+                            self.typed_parameters.push((
+                                scope_id,
+                                self.text(name),
+                                class.to_owned(),
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -367,7 +418,9 @@ impl Walker<'_> {
                         parts.push(self.text(attribute));
                         CallTarget::Qualified(parts)
                     }
-                    CallTarget::Dynamic => CallTarget::Dynamic,
+                    CallTarget::Dynamic
+                    | CallTarget::Property { .. }
+                    | CallTarget::TypedMethod { .. } => CallTarget::Dynamic,
                 }
             }
             _ => CallTarget::Dynamic,
@@ -446,6 +499,18 @@ impl Walker<'_> {
                 direct_fingerprint: direct.finish(),
                 non_call_fingerprint: non_call.finish(),
                 decorated: outer.id() != inner.id(),
+                property: method
+                    && outer.id() != inner.id()
+                    && self
+                        .named_children(outer)
+                        .iter()
+                        .filter(|n| n.kind() == "decorator")
+                        .count()
+                        == 1
+                    && self
+                        .named_children(outer)
+                        .iter()
+                        .any(|n| n.kind() == "decorator" && self.text(*n).trim() == "@property"),
                 conditional: false,
                 unknown_attribute: false,
             });
@@ -563,6 +628,31 @@ impl Walker<'_> {
                     self.visit(child, id);
                 }
             }
+            "attribute" => {
+                if let (Some(object), Some(attribute)) = (
+                    node.child_by_field_name("object"),
+                    node.child_by_field_name("attribute"),
+                ) && object.kind() == "identifier"
+                    && !node.parent().is_some_and(|parent| {
+                        matches!(
+                            parent.kind(),
+                            "assignment" | "augmented_assignment" | "annotated_assignment"
+                        ) && parent
+                            .child_by_field_name("left")
+                            .is_some_and(|left| left.id() == node.id())
+                    })
+                {
+                    self.property_reads.push((
+                        scope_id,
+                        self.text(object),
+                        self.text(attribute),
+                        self.source(node),
+                    ));
+                }
+                for child in self.named_children(node) {
+                    self.visit(child, scope_id);
+                }
+            }
             _ => {
                 for child in self.named_children(node) {
                     self.visit(child, scope_id);
@@ -655,10 +745,19 @@ impl LanguageAdapter for PythonAdapter {
     }
     fn discover(&self, snapshot: &CapturedSnapshot, include_test: bool) -> Discovery {
         let mut discovery = Discovery::default();
+        let mut prefixes = vec![Vec::new(), b"src/".to_vec()];
+        for path in snapshot.files.keys() {
+            if let Some(prefix) = path.strip_suffix(b"pyproject.toml")
+                && !prefix.is_empty()
+                && prefix.ends_with(b"/")
+            {
+                prefixes.push(prefix.to_vec());
+            }
+        }
         for path in snapshot.files.keys().filter(|path| {
             self.accepts_source(path) && (include_test || !crate::languages::is_test_path(path))
         }) {
-            let modules = python_module_candidates(snapshot, path);
+            let modules = python_module_candidates(snapshot, path, &prefixes);
             let module = (modules.len() == 1).then(|| modules[0].clone());
             if modules.len() > 1 {
                 discovery.diagnostics.push(Diagnostic {
@@ -786,6 +885,9 @@ impl LanguageAdapter for PythonAdapter {
             include_test,
             parsed,
             order: 0,
+            instances: Vec::new(),
+            property_reads: Vec::new(),
+            typed_parameters: Vec::new(),
         };
         walker.errors(root);
         walker.parsed.valid = walker.parsed.diagnostics.is_empty();
@@ -800,6 +902,74 @@ impl LanguageAdapter for PythonAdapter {
             });
         }
         walker.visit(root, 0);
+        for call in &mut walker.parsed.calls {
+            let CallTarget::Qualified(parts) = &call.target else {
+                continue;
+            };
+            if parts.len() != 2 {
+                continue;
+            }
+            let receiver = &parts[0];
+            let mut scope = Some(call.scope_id);
+            let mut constructor = None;
+            while let Some(id) = scope {
+                let mut bindings = walker
+                    .parsed
+                    .bindings
+                    .iter()
+                    .filter(|b| b.scope_id == id && b.name == *receiver);
+                if let Some(binding) = bindings.next() {
+                    if binding.kind == BindingKind::Parameter && bindings.next().is_none() {
+                        constructor = walker
+                            .typed_parameters
+                            .iter()
+                            .find(|(scope, name, _)| *scope == id && name == receiver)
+                            .map(|(_, _, name)| name.clone());
+                    }
+                    break;
+                }
+                scope = walker.parsed.scopes[id].parent;
+            }
+            if let Some(constructor) = constructor {
+                call.target = CallTarget::TypedMethod {
+                    constructor,
+                    name: parts[1].clone(),
+                };
+            }
+        }
+        for (scope_id, receiver, name, source) in &walker.property_reads {
+            let mut bindings = walker
+                .parsed
+                .bindings
+                .iter()
+                .filter(|binding| binding.scope_id == *scope_id && binding.name == *receiver);
+            if !bindings
+                .next()
+                .is_some_and(|binding| binding.kind == BindingKind::Assignment)
+                || bindings.next().is_some()
+            {
+                continue;
+            }
+            let Some((_, _, constructor, start)) = walker
+                .instances
+                .iter()
+                .find(|(id, obj, _, _)| id == scope_id && obj == receiver)
+            else {
+                continue;
+            };
+            if *start >= source.range.start_byte {
+                continue;
+            }
+            walker.parsed.calls.push(ExtractedCallSite {
+                scope_id: *scope_id,
+                expression: format!("{receiver}.{name}"),
+                target: CallTarget::Property {
+                    constructor: constructor.clone(),
+                    name: name.clone(),
+                },
+                source: source.clone(),
+            });
+        }
         walker.parsed
     }
 }

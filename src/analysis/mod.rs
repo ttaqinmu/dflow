@@ -93,6 +93,7 @@ pub struct Symbol {
     pub direct_fingerprint: String,
     pub non_call_fingerprint: String,
     pub decorated: bool,
+    pub property: bool,
     pub conditional: bool,
     pub unknown_attribute: bool,
 }
@@ -138,6 +139,8 @@ pub struct ExtractedCallSite {
 pub enum CallTarget {
     Name(String),
     Qualified(Vec<String>),
+    Property { constructor: String, name: String },
+    TypedMethod { constructor: String, name: String },
     Dynamic,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]

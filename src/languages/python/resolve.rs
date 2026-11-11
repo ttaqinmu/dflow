@@ -1,6 +1,6 @@
 use crate::analysis::{
     BindingKind, CallTarget, ExtractedCallSite, ExtractedSnapshot, ImportBinding, LanguageId,
-    ParsedFile, ScopeKind, Symbol,
+    ParsedFile, ScopeKind, Symbol, SymbolKind,
 };
 use crate::languages::{Resolution, UnresolvedReason};
 use std::collections::BTreeMap;
@@ -131,6 +131,103 @@ impl<'a> PythonIndex<'a> {
         }
         self.find_module_function(&module, path.last().unwrap())
     }
+    fn class_member(
+        &self,
+        file: &'a ParsedFile,
+        scope_id: usize,
+        constructor: &str,
+        name: &str,
+        property: bool,
+    ) -> Resolution<'a> {
+        let mut scope = Some(scope_id);
+        let mut target = None;
+        while let Some(id) = scope {
+            let mut bindings = file
+                .bindings
+                .iter()
+                .filter(|b| b.scope_id == id && b.name == constructor);
+            if let Some(binding) = bindings.next() {
+                if bindings.next().is_some() {
+                    return Resolution::Unresolved(UnresolvedReason::AmbiguousBinding);
+                }
+                if binding.kind == BindingKind::Import {
+                    let mut imports = file.imports.iter().filter(|i| {
+                        i.scope_id == id
+                            && (i.alias.as_deref() == Some(constructor)
+                                || (i.alias.is_none() && i.name.as_deref() == Some(constructor)))
+                    });
+                    if let Some(import) = imports.next()
+                        && imports.next().is_none()
+                        && !import.conditional
+                        && let Some(class) = &import.name
+                        && let Some(module) = resolve_module(file, import)
+                        && let Some(files) = self.modules.get(module.as_str())
+                        && let [target_file] = files.as_slice()
+                    {
+                        target = Some((*target_file, class.as_str()));
+                    }
+                } else if binding.kind == BindingKind::Definition {
+                    target = Some((file, constructor));
+                }
+                break;
+            }
+            scope = file.scopes[id].parent;
+        }
+        let Some((target_file, class_name)) = target else {
+            return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
+        };
+        if !target_file.valid
+            || target_file
+                .imports
+                .iter()
+                .any(|i| i.scope_id == 0 && i.wildcard)
+        {
+            return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
+        }
+        let mut classes = target_file
+            .scopes
+            .iter()
+            .filter(|s| s.kind == ScopeKind::Class && s.parent == Some(0) && s.name == class_name);
+        let Some(class) = classes.next() else {
+            return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
+        };
+        if classes.next().is_some()
+            || target_file
+                .bindings
+                .iter()
+                .filter(|b| b.scope_id == 0 && b.name == class_name)
+                .count()
+                != 1
+            || target_file
+                .bindings
+                .iter()
+                .any(|b| b.scope_id == class.id && b.name == "__getattribute__")
+        {
+            return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
+        }
+        let mut getters = target_file
+            .symbols
+            .iter()
+            .filter(|s| s.parent_scope == class.id && s.name == name);
+        let Some(getter) = getters.next() else {
+            return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
+        };
+        if getter.property != property
+            || (!property
+                && (getter.decorated
+                    || !matches!(getter.kind, SymbolKind::Method | SymbolKind::AsyncMethod)))
+            || getters.next().is_some()
+            || target_file
+                .bindings
+                .iter()
+                .filter(|b| b.scope_id == class.id && b.name == name)
+                .count()
+                != 1
+        {
+            return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
+        }
+        Resolution::Resolved(getter)
+    }
     pub fn resolve(&self, file: &'a ParsedFile, call: &ExtractedCallSite) -> Resolution<'a> {
         if !file.valid {
             return Resolution::Unresolved(UnresolvedReason::ParseError);
@@ -139,6 +236,12 @@ impl<'a> PythonIndex<'a> {
             CallTarget::Name(name) => vec![name.clone()],
             CallTarget::Qualified(parts) => parts.clone(),
             CallTarget::Dynamic => return Resolution::Unresolved(UnresolvedReason::DynamicTarget),
+            CallTarget::Property { constructor, name } => {
+                return self.class_member(file, call.scope_id, constructor, name, true);
+            }
+            CallTarget::TypedMethod { constructor, name } => {
+                return self.class_member(file, call.scope_id, constructor, name, false);
+            }
         };
         let name = &path[0];
         let mut scope = Some(call.scope_id);

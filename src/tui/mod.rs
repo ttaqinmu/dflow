@@ -482,18 +482,36 @@ mod tests {
     }
 
     #[test]
-    fn empty_partial_and_small_terminal_are_explicit() {
+    fn empty_partial_and_mobile_terminal_render() {
         let mode = mode();
         let empty = session(&[], &[]);
         let app = state::App::new(empty, &mode, 1);
         assert!(screen(&app, 120, 30).contains("No symbol or edge changes"));
-        assert!(screen(&app, 50, 10).contains("Terminal too small"));
+        assert!(screen(&app, 50, 10).contains("No symbol or edge changes"));
+        assert!(screen(&app, 30, 6).contains("Terminal too small"));
         let bad = session(&[], &[(b"bad.py", b"def f(:\n")]);
         let mut app = state::App::new(bad, &mode, 1);
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         let text = screen(&app, 120, 30);
         assert!(text.contains("PARTIAL analysis"));
         assert!(text.contains("Diagnostics:"));
+    }
+    #[test]
+    fn mobile_graph_can_pan_without_changing_selection() {
+        let target = [(b"a.py".as_slice(), b"def f(): pass\ndef g(): f()\n".as_slice())];
+        let fixture = session(&[], &target);
+        let mode = mode();
+        let mut app = state::App::new(fixture, &mode, 1);
+        let viewport = ratatui::layout::Rect::new(0, 0, 48, 4);
+        app.clamp(viewport);
+        assert!(screen(&app, 50, 10).contains("a.py"));
+        assert!(!screen(&app, 50, 10).contains("Terminal too small"));
+        let selected = app.selected_node.clone();
+        let before = app.pan_y;
+        app.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        app.clamp(viewport);
+        assert!(app.pan_y > before);
+        assert_eq!(app.selected_node, selected);
     }
     #[test]
     fn deleted_root_uses_base_graph_and_historical_evidence() {
