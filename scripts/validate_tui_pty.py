@@ -270,7 +270,16 @@ def live_case(binary: Path, root: Path, *, staged: bool = False) -> None:
                 output.extend(chunk)
                 screen.feed(chunk)
                 image = "\n".join(screen.rows())
-                if predicate(image):
+                rows = screen.rows()
+                border_ready = (
+                    rows[0].startswith("┌─")
+                    and rows[3][0] == "└"
+                    and rows[4].startswith("┌─")
+                    and rows[4][-1] == "┐"
+                    and rows[-1][0] == "└"
+                    and rows[-1][-1] == "┘"
+                )
+                if predicate(image) and border_ready:
                     return canvas(screen)
             if process.poll() is not None:
                 break

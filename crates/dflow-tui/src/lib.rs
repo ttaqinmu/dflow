@@ -3,14 +3,14 @@ mod render;
 mod state;
 mod watch;
 
-use crate::cli::CompareMode;
-use crate::git::{self, CaptureResult, CapturedSnapshot};
-use crate::report::AnalysisSession;
 use crossterm::event::{self, Event};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use dflow_core::comparison::Comparison;
+use dflow_core::git::{self, CaptureResult, CapturedSnapshot};
+use dflow_core::report::AnalysisSession;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
@@ -73,7 +73,7 @@ fn same_capture(a: &CaptureResult, b: &CaptureResult) -> bool {
 
 pub fn run(
     session: AnalysisSession,
-    mode: &CompareMode,
+    mode: &Comparison,
     depth: usize,
     discovery_dir: PathBuf,
     include_test: bool,
@@ -113,7 +113,7 @@ pub fn run(
                 terminal.draw(|frame| render::render(&app, frame))?;
                 redraw = false;
             }
-            if matches!(mode, CompareMode::Branch(_)) {
+            if matches!(mode, Comparison::Branch { .. }) {
                 match event::read()? {
                     Event::Key(key) if app.handle_key(key) => break,
                     Event::Key(_) | Event::Resize(_, _) => redraw = true,
@@ -169,12 +169,12 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::SymbolChangeKind;
-    use crate::cli::{AnalyzeOptions, LocalArgs};
-    use crate::git::{
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use dflow_core::analysis::SymbolChangeKind;
+    use dflow_core::comparison::LocalSelection;
+    use dflow_core::git::{
         CaptureResult, CapturedFile, CapturedSnapshot, SnapshotKind, SnapshotPair, SnapshotRole,
     };
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::backend::TestBackend;
     use ratatui::style::{Color, Modifier};
     use std::collections::BTreeMap;
@@ -213,15 +213,8 @@ mod tests {
             true,
         )
     }
-    fn mode() -> CompareMode {
-        CompareMode::Local(LocalArgs {
-            staged: false,
-            unstaged: false,
-            options: AnalyzeOptions {
-                format: None,
-                depth: 1,
-            },
-        })
+    fn mode() -> Comparison {
+        Comparison::Local(LocalSelection::Combined)
     }
     fn screen(app: &state::App<'_>, width: u16, height: u16) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -498,7 +491,10 @@ mod tests {
     }
     #[test]
     fn mobile_graph_can_pan_without_changing_selection() {
-        let target = [(b"a.py".as_slice(), b"def f(): pass\ndef g(): f()\n".as_slice())];
+        let target = [(
+            b"a.py".as_slice(),
+            b"def f(): pass\ndef g(): f()\n".as_slice(),
+        )];
         let fixture = session(&[], &target);
         let mode = mode();
         let mut app = state::App::new(fixture, &mode, 1);
@@ -1113,8 +1109,8 @@ mod tests {
         assert_ne!(routes[0].port, routes[1].port);
         for route in routes {
             let marker = match app.edge_status[&(route.caller.clone(), route.callee.clone())] {
-                crate::graph::EdgeChangeKind::Added => '+',
-                crate::graph::EdgeChangeKind::Deleted => '-',
+                dflow_core::graph::EdgeChangeKind::Added => '+',
+                dflow_core::graph::EdgeChangeKind::Deleted => '-',
             };
             assert_eq!(
                 graph_char(&text, b.x - 2, b.y + 1 + route.port as i32),
@@ -1134,8 +1130,8 @@ mod tests {
             let x = (callee.x) as u16;
             let y = (6 + callee.y + route.port as i32) as u16;
             let expected = match route.status {
-                Some(crate::graph::EdgeChangeKind::Added) => Color::Green,
-                Some(crate::graph::EdgeChangeKind::Deleted) => Color::Red,
+                Some(dflow_core::graph::EdgeChangeKind::Added) => Color::Green,
+                Some(dflow_core::graph::EdgeChangeKind::Deleted) => Color::Red,
                 None => Color::Reset,
             };
             assert_eq!(buffer[(x - 2, y)].fg, expected);

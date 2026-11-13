@@ -5,7 +5,7 @@ Coverage: P2 diagram export, editor invocation/report consumption, and current/h
 
 ## Deliverable
 
-Export focused Mermaid diagrams from the shared report and provide a Zed workflow that invokes DFlow, consumes JSON, and exposes changes, callers, and source references. Keep the existing CLI crate intact. This phase does not promise arbitrary custom panels through unsupported Zed APIs.
+Export focused Mermaid diagrams from the shared report and provide a Zed workflow that invokes DFlow, consumes JSON, and exposes changes, callers, and source references. Keep the existing `dflow` binary interface intact in the workspace. This phase does not promise arbitrary custom panels through unsupported Zed APIs.
 
 ## Mermaid implementation
 
@@ -22,7 +22,7 @@ First validate the supported Zed version and extension capabilities against the 
 1. Add example Zed tasks for local, staged, unstaged, and configured branch-pair analysis, running the installed `dflow` in the selected worktree with explicit TUI output. Use structured arguments and proper path quoting; do not silently save editor buffers. Document that unsaved buffers are outside Git/worktree analysis.
 2. Add a thin MCP stdio adapter subcommand to the existing DFlow binary. An analysis tool accepts an explicit repository directory, comparison mode, branch/local options, and depth; it invokes the same internal analysis request and returns the versioned report, not a reconstructed graph. Protocol stdout must contain only protocol messages; logs use stderr. Validate paths/options and prohibit Git mutations exactly as CLI mode does.
 3. Expose captured source evidence by snapshot identity/path/range for historical references. Commit content may be reread by immutable object ID; local source evidence must come from the retained capture, never the current live file. Expired local captures must be reported as unavailable rather than silently substituted.
-4. Build a minimal development extension launcher in a separate companion project, keeping DFlow's main repository a single crate. Locate a configured/installed DFlow binary, verify its supported protocol/schema, and launch its stdio adapter. Consume the JSON report through the adapter and expose structured changed-symbol/caller evidence in the supported Zed surface.
+4. Build a minimal development extension launcher in a separate companion project, keeping DFlow's workspace organization intact. Locate a configured/installed DFlow binary, verify its supported protocol/schema, and launch its stdio adapter. Consume the JSON report through the adapter and expose structured changed-symbol/caller evidence in the supported Zed surface.
 5. Keep target paths and line references visible for navigation; visibly distinguish historical base references and supply read-only captured content when the editor surface supports it. When direct editor navigation is unavailable, show explicit path/range/snapshot references and historical text instead of opening the wrong live line. Native custom source navigation remains a capability-dependent enhancement.
 6. Provide dev-install instructions, configured binary path handling, errors for missing/incompatible binaries or schema versions, and a smoke-test walkthrough. Do not automatically publish or install the extension.
 

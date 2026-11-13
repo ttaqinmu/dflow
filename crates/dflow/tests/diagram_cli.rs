@@ -1,5 +1,9 @@
 use git2::{Repository, Signature};
-use std::{fs, path::Path, process::{Command, Output}};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Output},
+};
 use tempfile::TempDir;
 
 const OLD: &str = "def B(): pass\ndef C(): pass\ndef A(): B()\n";
@@ -12,15 +16,32 @@ fn commit(repo: &Repository) {
     let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
     let sig = Signature::now("Fixture", "fixture@example.com").unwrap();
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-    repo.commit(Some("HEAD"), &sig, &sig, "fixture", &tree, &parent.iter().collect::<Vec<_>>()).unwrap();
+    repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        "fixture",
+        &tree,
+        &parent.iter().collect::<Vec<_>>(),
+    )
+    .unwrap();
 }
 
 fn run(dir: &TempDir, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_dflow")).current_dir(dir.path()).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_dflow"))
+        .current_dir(dir.path())
+        .args(args)
+        .output()
+        .unwrap()
 }
 
 fn assert_retarget(output: &Output, format: &str) {
-    assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(output.stderr.is_empty());
     let text = std::str::from_utf8(&output.stdout).unwrap();
     assert!(text.ends_with('\n') && !text.ends_with("\n\n"));
@@ -47,8 +68,14 @@ fn assert_retarget(output: &Output, format: &str) {
         assert_eq!(text.matches(" -->").count(), 2);
     } else {
         assert!(text.starts_with("digraph dflow {\n  rankdir=LR;\n"));
-        assert!(text.contains(&format!("{} -> {} [label=\"- base\"]", names["A"], names["B"])));
-        assert!(text.contains(&format!("{} -> {} [label=\"+ target\"]", names["A"], names["C"])));
+        assert!(text.contains(&format!(
+            "{} -> {} [label=\"- base\"]",
+            names["A"], names["B"]
+        )));
+        assert!(text.contains(&format!(
+            "{} -> {} [label=\"+ target\"]",
+            names["A"], names["C"]
+        )));
         assert_eq!(text.matches(" -> ").count(), 2);
     }
     assert!(!text.contains("modified"));
@@ -62,17 +89,32 @@ fn local_staged_unstaged_and_branch_export_retargets() {
     commit(&repo);
     for format in ["mermaid", "dot"] {
         fs::write(dir.path().join("a.py"), NEW).unwrap();
-        assert_retarget(&run(&dir, &["local", "--format", format, "--depth", "0"]), format);
+        assert_retarget(
+            &run(&dir, &["local", "--format", format, "--depth", "0"]),
+            format,
+        );
         let mut index = repo.index().unwrap();
         index.add_path(Path::new("a.py")).unwrap();
         index.write().unwrap();
-        assert_retarget(&run(&dir, &["local", "--staged", "--format", format, "--depth", "0"]), format);
+        assert_retarget(
+            &run(
+                &dir,
+                &["local", "--staged", "--format", format, "--depth", "0"],
+            ),
+            format,
+        );
         fs::write(dir.path().join("a.py"), OLD).unwrap();
         let mut index = repo.index().unwrap();
         index.add_path(Path::new("a.py")).unwrap();
         index.write().unwrap();
         fs::write(dir.path().join("a.py"), NEW).unwrap();
-        assert_retarget(&run(&dir, &["local", "--unstaged", "--format", format, "--depth", "0"]), format);
+        assert_retarget(
+            &run(
+                &dir,
+                &["local", "--unstaged", "--format", format, "--depth", "0"],
+            ),
+            format,
+        );
     }
     let base = repo.head().unwrap().peel_to_commit().unwrap();
     repo.branch("base", &base, false).unwrap();
@@ -80,7 +122,9 @@ fn local_staged_unstaged_and_branch_export_retargets() {
     commit(&repo);
     let target = repo.head().unwrap().peel_to_commit().unwrap();
     repo.branch("target", &target, false).unwrap();
-    let args = ["branch", "--base", "base", "--target", "target", "--depth", "0"];
+    let args = [
+        "branch", "--base", "base", "--target", "target", "--depth", "0",
+    ];
     for format in ["mermaid", "dot"] {
         let mut export = args.to_vec();
         export.extend(["--format", format]);

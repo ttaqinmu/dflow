@@ -1,8 +1,8 @@
 use super::state::{App, kind, role_name, safe_text};
-use crate::analysis::SymbolChangeKind;
-use crate::cli::CompareMode;
-use crate::git::CapturedSnapshot;
-use crate::graph::EdgeChangeKind;
+use dflow_core::analysis::SymbolChangeKind;
+use dflow_core::comparison::{Comparison, LocalSelection};
+use dflow_core::git::CapturedSnapshot;
+use dflow_core::graph::EdgeChangeKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -23,23 +23,19 @@ fn truncate(value: &str, width: usize) -> String {
         })
         .collect()
 }
-fn mode_label(mode: &CompareMode) -> String {
+fn mode_label(mode: &Comparison) -> String {
     match mode {
-        CompareMode::Local(args) => format!(
+        Comparison::Local(selection) => format!(
             "local {}",
-            if args.staged {
-                "staged"
-            } else if args.unstaged {
-                "unstaged"
-            } else {
-                "combined"
+            match selection {
+                LocalSelection::Combined => "combined",
+                LocalSelection::Staged => "staged",
+                LocalSelection::Unstaged => "unstaged",
             }
         ),
-        CompareMode::Branch(args) => format!(
-            "branch {} -> {}",
-            safe_text(&args.base),
-            safe_text(&args.target)
-        ),
+        Comparison::Branch { base, target } => {
+            format!("branch {} -> {}", safe_text(base), safe_text(target))
+        }
     }
 }
 fn snapshot_label(snapshot: &CapturedSnapshot) -> String {
@@ -407,7 +403,12 @@ pub fn render(app: &App<'_>, frame: &mut ratatui::Frame<'_>) {
     // Only require room for a bordered graph cell below the status header.
     // Smaller viewports remain navigable by panning rather than hiding the graph.
     if area.width < 3 || area.height < HEADER_HEIGHT + 3 {
-        frame.render_widget(Paragraph::new("Terminal too small for graph. Press q to quit or ? for help.").block(panel("")).wrap(Wrap { trim: false }), area);
+        frame.render_widget(
+            Paragraph::new("Terminal too small for graph. Press q to quit or ? for help.")
+                .block(panel(""))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
         return;
     }
     let vertical = Layout::default()

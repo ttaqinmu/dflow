@@ -1,0 +1,16 @@
+[package]
+name = "dflow-tui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+dflow-core = { path = "../dflow-core" }
+crossterm = "0.29"
+ratatui = "0.29"
+notify = "8.2.2"
+git2 = "0.20"
+petgraph = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

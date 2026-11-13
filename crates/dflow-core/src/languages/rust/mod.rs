@@ -840,9 +840,9 @@ mod tests {
     }
     #[test]
     fn fixture_has_independent_names_scopes_ranges_and_calls() {
-        let text = include_str!("../../../tests/fixtures/rust/analysis.rs");
+        let text = include_str!("../../../../dflow/tests/fixtures/rust/analysis.rs");
         let expected: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/rust/analysis.expected.json"
+            "../../../../dflow/tests/fixtures/rust/analysis.expected.json"
         ))
         .unwrap();
         let target = expected["target"].as_str().unwrap();

@@ -6,12 +6,12 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 #[derive(Clone, Copy)]
-pub(crate) enum DiagramFormat {
+pub enum DiagramFormat {
     Mermaid,
     Dot,
 }
 
-pub(crate) fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) -> String {
+pub fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) -> String {
     let focused = session.focused_graph(depth);
     let mut out = match format {
         DiagramFormat::Mermaid => "flowchart LR".to_owned(),
@@ -29,12 +29,21 @@ pub(crate) fn render(session: &AnalysisSession, depth: usize, format: DiagramFor
         let node = if let Some(native) = &provenance.target {
             &session.target_graph.graph[session.target_graph.ids[native]]
         } else {
-            let native = provenance.base.as_ref().expect("focused node has provenance");
+            let native = provenance
+                .base
+                .as_ref()
+                .expect("focused node has provenance");
             &session.base_graph.graph[session.base_graph.ids[native]]
         };
         let mut label = String::new();
         if let Some(symbol) = &node.symbol {
-            write!(label, "{} | {}", symbol.qualified_name, display_path(&symbol.source.path)).unwrap();
+            write!(
+                label,
+                "{} | {}",
+                symbol.qualified_name,
+                display_path(&symbol.source.path)
+            )
+            .unwrap();
         } else if let Some(path) = &node.module_path {
             let basename = path.rsplit(|byte| *byte == b'/').next().unwrap_or(path);
             write!(label, "{} | {}", display_path(basename), display_path(path)).unwrap();
@@ -52,7 +61,10 @@ pub(crate) fn render(session: &AnalysisSession, depth: usize, format: DiagramFor
     }
     let mut changed_edges = focused.edge_status.iter().peekable();
     for ((caller, callee), contributors) in &focused.edges {
-        let changed = if changed_edges.peek().is_some_and(|((from, to), _)| from == caller && to == callee) {
+        let changed = if changed_edges
+            .peek()
+            .is_some_and(|((from, to), _)| from == caller && to == callee)
+        {
             changed_edges.next().map(|(_, kind)| kind)
         } else {
             None
@@ -61,8 +73,12 @@ pub(crate) fn render(session: &AnalysisSession, depth: usize, format: DiagramFor
             Some(EdgeChangeKind::Added) => "+ target",
             Some(EdgeChangeKind::Deleted) => "- base",
             None => {
-                let base = contributors.iter().any(|(role, _, _)| *role == SnapshotRole::Base);
-                let target = contributors.iter().any(|(role, _, _)| *role == SnapshotRole::Target);
+                let base = contributors
+                    .iter()
+                    .any(|(role, _, _)| *role == SnapshotRole::Base);
+                let target = contributors
+                    .iter()
+                    .any(|(role, _, _)| *role == SnapshotRole::Target);
                 match (base, target) {
                     (true, true) => "both",
                     (true, false) => "base",
@@ -72,15 +88,32 @@ pub(crate) fn render(session: &AnalysisSession, depth: usize, format: DiagramFor
             }
         };
         match format {
-            DiagramFormat::Mermaid => write!(out, "\n  n{} -->|{status}| n{}", ids[caller.as_str()], ids[callee.as_str()]).unwrap(),
-            DiagramFormat::Dot => write!(out, "\n  n{} -> n{} [label=\"{status}\"];", ids[caller.as_str()], ids[callee.as_str()]).unwrap(),
+            DiagramFormat::Mermaid => write!(
+                out,
+                "\n  n{} -->|{status}| n{}",
+                ids[caller.as_str()],
+                ids[callee.as_str()]
+            )
+            .unwrap(),
+            DiagramFormat::Dot => write!(
+                out,
+                "\n  n{} -> n{} [label=\"{status}\"];",
+                ids[caller.as_str()],
+                ids[callee.as_str()]
+            )
+            .unwrap(),
         }
     }
     if ids.is_empty() {
         node_line(&mut out, format, 0, "No symbol or edge changes");
     }
     if !session.complete() {
-        node_line(&mut out, format, ids.len() + usize::from(ids.is_empty()), "PARTIAL analysis");
+        node_line(
+            &mut out,
+            format,
+            ids.len() + usize::from(ids.is_empty()),
+            "PARTIAL analysis",
+        );
     }
     if matches!(format, DiagramFormat::Dot) {
         out.push_str("\n}");
@@ -129,7 +162,12 @@ fn node_line(out: &mut String, format: DiagramFormat, index: usize, label: &str)
 // the entity introducer itself, and controls so user text stays on one declaration.
 fn escape_mermaid(out: &mut String, label: &str) {
     for ch in label.chars() {
-        if ch.is_control() || matches!(ch, '&' | '#' | '"' | '<' | '>' | '[' | ']' | '{' | '}' | '|' | '`' | '\\' | ';') {
+        if ch.is_control()
+            || matches!(
+                ch,
+                '&' | '#' | '"' | '<' | '>' | '[' | ']' | '{' | '}' | '|' | '`' | '\\' | ';'
+            )
+        {
             write!(out, "#{};", ch as u32).unwrap();
         } else {
             out.push(ch);
@@ -140,7 +178,10 @@ fn escape_mermaid(out: &mut String, label: &str) {
 fn escape_dot(out: &mut String, label: &str) {
     for ch in label.chars() {
         match ch {
-            '"' | '\\' => { out.push('\\'); out.push(ch); }
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
             '\n' => out.push_str("\\n"),
             _ if ch.is_control() => write!(out, "U+{:04X}", ch as u32).unwrap(),
             _ => out.push(ch),
@@ -159,18 +200,32 @@ mod tests {
             role,
             commit_id: None,
             branch: None,
-            files: inputs.iter().map(|(path, bytes)| (path.to_vec(), CapturedFile {
-                path: path.to_vec(), bytes: bytes.to_vec(), mode: 0o100644,
-            })).collect(),
+            files: inputs
+                .iter()
+                .map(|(path, bytes)| {
+                    (
+                        path.to_vec(),
+                        CapturedFile {
+                            path: path.to_vec(),
+                            bytes: bytes.to_vec(),
+                            mode: 0o100644,
+                        },
+                    )
+                })
+                .collect(),
             content_id: String::new(),
         };
-        AnalysisSession::new(CaptureResult {
-            pair: SnapshotPair {
-                base: snapshot(SnapshotRole::Base, base),
-                target: snapshot(SnapshotRole::Target, target),
+        AnalysisSession::new(
+            CaptureResult {
+                pair: SnapshotPair {
+                    base: snapshot(SnapshotRole::Base, base),
+                    target: snapshot(SnapshotRole::Target, target),
+                },
+                changes: vec![],
+                diagnostics: vec![],
             },
-            changes: vec![], diagnostics: vec![],
-        }, true)
+            true,
+        )
     }
 
     #[test]
@@ -198,8 +253,22 @@ mod tests {
         let session = session(&[(b"a.py", old)], &[(b"a.py", new)]);
         let output = render(&session, 2, DiagramFormat::Dot);
         assert!(output.contains("B | a.py | base | deleted"));
-        let a = output.lines().find(|line| line.contains("A | a.py")).unwrap().trim().split_whitespace().next().unwrap();
-        let b = output.lines().find(|line| line.contains("B | a.py")).unwrap().trim().split_whitespace().next().unwrap();
+        let a = output
+            .lines()
+            .find(|line| line.contains("A | a.py"))
+            .unwrap()
+            .trim()
+            .split_whitespace()
+            .next()
+            .unwrap();
+        let b = output
+            .lines()
+            .find(|line| line.contains("B | a.py"))
+            .unwrap()
+            .trim()
+            .split_whitespace()
+            .next()
+            .unwrap();
         assert!(output.contains(&format!("{a} -> {b} ")));
         assert!(output.contains(&format!("{b} -> {a} ")));
     }
@@ -210,7 +279,10 @@ mod tests {
         let new = b"def B(): return 2\ndef C(): return 2\ndef shared(): B(); C()\n";
         let session = session(&[(b"a.py", old)], &[(b"a.py", new)]);
         let output = render(&session, 1, DiagramFormat::Dot);
-        let shared: Vec<_> = output.lines().filter(|line| line.contains("shared | a.py")).collect();
+        let shared: Vec<_> = output
+            .lines()
+            .filter(|line| line.contains("shared | a.py"))
+            .collect();
         assert_eq!(shared.len(), 1);
         let id = shared[0].trim().split_whitespace().next().unwrap();
         assert_eq!(output.matches(&format!("{id} -> ")).count(), 2);
@@ -219,7 +291,10 @@ mod tests {
     #[test]
     fn empty_and_invalid_source() {
         let empty = session(&[], &[]);
-        assert_eq!(render(&empty, 0, DiagramFormat::Mermaid), "flowchart LR\n  n0[\"No symbol or edge changes\"]");
+        assert_eq!(
+            render(&empty, 0, DiagramFormat::Mermaid),
+            "flowchart LR\n  n0[\"No symbol or edge changes\"]"
+        );
         let invalid = session(&[], &[(b"bad.py", b"def broken(:\n")]);
         assert!(!invalid.complete());
         let output = render(&invalid, 0, DiagramFormat::Dot);
@@ -233,7 +308,10 @@ mod tests {
         let mut mermaid = String::new();
         node_line(&mut mermaid, DiagramFormat::Mermaid, 0, label);
         assert_eq!(mermaid.lines().count(), 2);
-        for entity in ["#34;", "#91;", "#93;", "#123;", "#125;", "#35;", "#38;", "#124;", "#96;", "#92;", "#59;", "#10;", "#9;"] {
+        for entity in [
+            "#34;", "#91;", "#93;", "#123;", "#125;", "#35;", "#38;", "#124;", "#96;", "#92;",
+            "#59;", "#10;", "#9;",
+        ] {
             assert!(mermaid.contains(entity), "{entity}");
         }
         let mut dot = String::new();

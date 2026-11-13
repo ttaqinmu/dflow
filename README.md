@@ -65,7 +65,7 @@ Supported Python resolution covers direct lexical calls, explicit repository imp
 
 ## Development
 
-Install a Rust toolchain that supports the 2024 edition, then run:
+Install Rust 1.95 or newer for the optional GUI dependencies (the headless and TUI crates also support older Rust 2024 toolchains), then run:
 
 For source formatting, follow the [Rust code style guidelines](docs/code-style.md) and run `cargo fmt --all` before committing.
 
@@ -77,17 +77,20 @@ cargo run -- branch --base main --target feature
 cargo run -- local --format json --depth 2 --include-test
 cargo run -- local --format mermaid --depth 2 > impact.mmd
 cargo run -- branch --base main --target feature --format dot > impact.dot
+cargo run --features tui -- local --render tui
+cargo run --features gui -- local --render gui
 cargo run -- --dir ../other-repo local
 cargo run -- branch --base main --target feature --dir ../other-repo
 ```
 
 `--dir DIR` selects the starting directory for Git repository discovery in either mode. Relative paths resolve against the process current directory, not the repository root; paths inside a repository work because discovery ascends to its root. Without `--dir`, discovery starts at the process current directory. A missing or non-repository directory is invalid input (exit 2).
 `--include-test` is off by default in both modes and can appear before or after the subcommand. Without it, conventional Python test files (`test_*.py`, `*_test.py`, `conftest.py`), Rust test files (`test_*.rs`, `*_test.rs`, `tests.rs`), and files under `test/`, `tests/`, or `__tests__/` are omitted. Test-named Python definitions (`test_*` and `Test*` classes) and Rust `#[test]`/`#[cfg(test)]` code within other source files are also omitted. With the flag, those files and definitions participate in both JSON reports and the TUI, including live reloads.
-If both stdin and stdout are terminals, the default output is an interactive graph. Otherwise the default is JSON. `--format json` always writes one JSON object to stdout; `--format tui` requires both terminals. `--format mermaid` and `--format dot` write one-shot plain diagram source with no Markdown fences or terminal escapes, even when redirected. DOT is Graphviz source, not a rendered image; use `dot -Tsvg impact.dot -o impact.svg` if Graphviz is installed. Exit status is 0 for complete analysis, 1 for partial analysis or operational failure, and 2 for invalid input. A parse error produces a partial report, while an unresolved call by itself does not.
+The default headless build emits JSON, including when both streams are terminals. With `--features tui`, interactive TUI is the default only when both stdin and stdout are terminals; otherwise JSON remains the default. `--render tui` (or legacy `--format tui`) requires both terminals and the `tui` feature; `--render gui` requires the `gui` feature and opens a native window even with redirected stdio. `--render` conflicts with `--format`; unavailable features exit 2 with rebuild guidance. `--format json` always writes one JSON object to stdout. `--format mermaid` and `--format dot` write one-shot plain diagram source without Markdown fences or terminal escapes. DOT is Graphviz source, not a rendered image; use `dot -Tsvg impact.dot -o impact.svg` if Graphviz is installed. Exit status is 0 for complete analysis, 1 for partial analysis or operational failure (including GUI startup), and 2 for invalid input. A parse error produces a partial report, while an unresolved call by itself does not.
 
 Diagram nodes show qualified symbol name or module basename, repository-relative path, base/target provenance, and any added/modified/deleted status. Arrows point from caller to callee; `+ target` and `- base` mark changed call edges. `--depth` adds incoming callers to the focused comparison graph (depth 0 still includes changed-edge endpoints). An empty comparison emits `No symbol or edge changes`; incomplete analysis also emits `PARTIAL analysis`. Non-UTF-8 paths are shown as `hex:` followed by lowercase bytes. Diagram exports are one-shot and do not run a watcher or build the analyzed project.
 
 Local TUI comparisons reload Git snapshots automatically when relevant source, ignore rules, index, or branch metadata changes; no keypress or restart is needed. Combined/unstaged mode observes worktree edits; `--staged` observes only committed/index changes. The TUI retains its last valid graph and displays `RELOAD ERROR` if a recapture fails, then clears the error after recovery. Invalid source is shown as partial analysis until repaired. Quitting with a remaining reload error exits 1. Branch comparisons stay fixed at their initially captured commit tips, and JSON output remains a one-shot report.
+The GUI uses one captured comparison at launch (local changes do not live-reload). Drag nodes to reposition them, drag the background to pan, scroll to zoom, select nodes for base/target captured-source excerpts and call evidence, and use `+`/`−` to change caller depth. Changed roots and edge statuses have textual labels as well as color; deleted source comes from the base capture. Closing the window preserves the initial complete/partial exit status. The GUI never prints a report to stdout.
 
 ### Terminal controls
 
@@ -113,7 +116,7 @@ Run the current test suite with:
 cargo test
 ```
 
-The single root-level crate uses `git2` for Git snapshots. Tree-sitter parses Python and Rust source, including fixture-tested Rust 2018, 2021, and 2024 syntax editions (static syntax parsing, not edition-specific compiler/type checking). Python module discovery supports regular packages at the repository root or under `src/`, including a static setuptools `package-dir` root of `.` or `src` in `pyproject.toml`. Rust discovery uses captured root/workspace-member `Cargo.toml` manifests, conventional or explicit lib/bin roots, and unambiguous inline/external/`#[path]` modules; it does not expand Cargo globs, macros, build scripts, or dependencies. Missing/ambiguous Rust layouts and invalid source yield partial analysis. Local capture includes non-ignored untracked sources, skips symlinks and submodules, and rejects unresolved index conflicts. `petgraph` stores the call graphs; Ratatui and Crossterm draw the terminal view.
+The root workspace contains `dflow-core` (headless snapshot/analysis/report/diagram library), `dflow-tui` (terminal library), `dflow-gui` (native graph library), and the `dflow` binary; `cargo run -- …` and `cargo test` default to the binary. `git2` captures Git snapshots. Tree-sitter parses Python and Rust source, including fixture-tested Rust 2018, 2021, and 2024 syntax editions (static syntax parsing, not edition-specific compiler/type checking). Python module discovery supports regular packages at the repository root or under `src/`, including a static setuptools `package-dir` root of `.` or `src` in `pyproject.toml`. Rust discovery uses captured root/workspace-member `Cargo.toml` manifests, conventional or explicit lib/bin roots, and unambiguous inline/external/`#[path]` modules; it does not expand Cargo globs, macros, build scripts, or dependencies. Missing/ambiguous Rust layouts and invalid source yield partial analysis. Local capture includes non-ignored untracked sources, skips symlinks and submodules, and rejects unresolved index conflicts. `petgraph` stores the call graphs; Ratatui and Crossterm draw the optional terminal view.
 
 ### Testing approach
 

@@ -9,18 +9,19 @@ Implement milestones sequentially. Each milestone plan is self-contained about i
 
 | Order | Plan | Outcome |
 | --- | --- | --- |
-| M1 | [Project and Git snapshots](01-project-and-git-snapshots.md) | Root-level single binary crate and all Git comparisons |
+| M1 | [Project and Git snapshots](01-project-and-git-snapshots.md) | Initial binary crate and all Git comparisons |
 | M2 | [Python extraction and changes](02-python-symbols-and-changes.md) | Python syntax, symbols, call sites, imports, and change classification |
 | M3 | [Call graphs and reports](03-call-graphs-and-reports.md) | Conservative resolution, impact traversal, and stable JSON |
 | M4 | [Interactive terminal and Python release](04-terminal-ui-and-python-mvp.md) | Complete Python MVP, terminal graph, and release validation |
 | M5 | [Rust analysis](05-rust-analysis.md) | Second analysis language with the same Git/report/TUI behavior |
 | M6 | [Mermaid and Zed](06-mermaid-and-zed.md) | Diagram export and an editor integration prototype |
+| GUI | [GUI workspace refactor](gui/gui-workspace-plan.md) | Headless core, optional terminal and native GUI renderers |
 
 The first release ends at M4. Start Rust work only after Python acceptance passes. Zed follows CLI stability. These files plan work; creating them does not authorize publishing packages or installing an extension into a user's editor.
 
 ## Shared implementation rules
 
-- Use one Rust 2024 binary crate with root `Cargo.toml` and `Cargo.lock`; keep analysis and presentation in internal modules. Do not create a workspace or initial library crate.
+- Use a Rust 2024 workspace with `dflow-core`, `dflow-tui`, `dflow-gui`, and the feature-selectable `dflow` binary; the initial milestones used a single binary crate.
 - Use `git2` for production Git access, Tree-sitter plus language grammars for parsing, and `petgraph` for directed graphs. Use Ratatui/Crossterm for the terminal.
 - Treat source snapshots as immutable captured inputs. Never check out branches, write the index or objects, execute repository programs, or fetch dependencies from an analyzed project.
 - Keep arrows caller → callee. Traverse incoming edges for callers. Deleted roots use base; added and modified roots use target.
@@ -46,7 +47,7 @@ The first release ends at M4. Start Rust work only after Python acceptance passe
 | FR12: empty JSON/TUI result | M3, M4 | M4 |
 | FR13: interactive graph and terminal lifecycle | M4 | M4, M5 |
 | FR14: repository integrity | M1 and every consumer | Every milestone |
-| Root-level single crate and required dependencies | M1 | M4 |
+| Workspace and optional UI crates (superseding the initial single-crate layout) | GUI | GUI |
 | Non-ignored untracked files, unborn HEAD, conflicts, dirty branches | M1 | M4 |
 | Source discovery, package roots, symlinks, submodules | M1, M2 | M4 |
 | Report locations, content identity, schema compatibility | M1–M3 | M4, M6 |
@@ -58,7 +59,7 @@ The first release ends at M4. Start Rust work only after Python acceptance passe
 
 ## Validation conventions
 
-Use Rust integration tests with temporary repositories populated through `git2`. Test the binary through `CARGO_BIN_EXE_dflow`; keep focused internal tests inside binary modules. Do not add a library target just to expose internals to tests.
+Use Rust integration tests with temporary repositories populated through `git2`. Test the binary through `CARGO_BIN_EXE_dflow`; keep focused unit tests in the owning crate.
 
 Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` at each implemented milestone. In this workspace, prefix shell commands with `rtk` as required by the repository instructions. Fixture expectations must encode independently known symbols, targets, and evidence, not copy the analyzer's own output as the sole oracle.
 

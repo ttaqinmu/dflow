@@ -1,4 +1,4 @@
-use crate::graph::{EdgeChangeKind, Impact};
+use dflow_core::graph::{EdgeChangeKind, Impact};
 use petgraph::algo::kosaraju_scc;
 use petgraph::stable_graph::StableDiGraph;
 use std::collections::{BTreeMap, BTreeSet};

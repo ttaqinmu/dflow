@@ -1,21 +1,21 @@
 use crate::analysis::{self, ChangeAnalysis, ExtractedSnapshot, SourceRange, SymbolChangeKind};
-use crate::cli::CompareMode;
+use crate::comparison::{Comparison, LocalSelection};
 use crate::git::{CaptureResult, CapturedSnapshot, ChangeKind, SnapshotKind, SnapshotRole};
 use crate::graph::{self, SnapshotGraph};
 use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub(crate) type EdgeContributor = (SnapshotRole, String, String);
+pub type EdgeContributor = (SnapshotRole, String, String);
 
 #[derive(Default)]
-pub(crate) struct FocusedNode {
+pub struct FocusedNode {
     pub base: Option<String>,
     pub target: Option<String>,
     pub changes: Vec<SymbolChangeKind>,
 }
 
-pub(crate) struct FocusedGraph {
+pub struct FocusedGraph {
     pub nodes: BTreeMap<String, FocusedNode>,
     pub edges: BTreeMap<(String, String), Vec<EdgeContributor>>,
     pub edge_status: BTreeMap<(String, String), graph::EdgeChangeKind>,
@@ -68,7 +68,7 @@ impl AnalysisSession {
     pub fn complete(&self) -> bool {
         self.changes.complete && self.capture.diagnostics.is_empty()
     }
-    pub(crate) fn focused_graph(&self, depth: usize) -> FocusedGraph {
+    pub fn focused_graph(&self, depth: usize) -> FocusedGraph {
         let native_to_view = &self.edge_comparison.native_to_view;
         let mut nodes: BTreeMap<String, FocusedNode> = BTreeMap::new();
         for graph in [&self.base_graph, &self.target_graph] {
@@ -95,7 +95,10 @@ impl AnalysisSession {
                 SnapshotRole::Base => &self.base_graph,
                 SnapshotRole::Target => &self.target_graph,
             };
-            let Some(root) = graph.symbol_ids.get(&(symbol.unit.clone(), symbol.scope_id)) else {
+            let Some(root) = graph
+                .symbol_ids
+                .get(&(symbol.unit.clone(), symbol.scope_id))
+            else {
                 continue;
             };
             let view_root = native_to_view[root].clone();
@@ -103,13 +106,19 @@ impl AnalysisSession {
             changed_roots.push(view_root);
             let impact = graph::callers(graph, root, depth);
             for (native, distance) in impact.nodes {
-                distances.entry(native_to_view[&native].clone())
+                distances
+                    .entry(native_to_view[&native].clone())
                     .and_modify(|old| *old = (*old).min(distance))
                     .or_insert(distance);
             }
             for (caller, callee) in impact.edges {
-                edges.entry((native_to_view[&caller].clone(), native_to_view[&callee].clone()))
-                    .or_default().push((role, caller, callee));
+                edges
+                    .entry((
+                        native_to_view[&caller].clone(),
+                        native_to_view[&callee].clone(),
+                    ))
+                    .or_default()
+                    .push((role, caller, callee));
             }
         }
         for change in &self.edge_comparison.changes {
@@ -126,19 +135,27 @@ impl AnalysisSession {
             };
             let impact = graph::callers(graph, callee, depth);
             for (native, distance) in impact.nodes {
-                distances.entry(native_to_view[&native].clone())
+                distances
+                    .entry(native_to_view[&native].clone())
                     .and_modify(|old| *old = (*old).min(distance))
                     .or_insert(distance);
             }
             for (from, to) in impact.edges {
-                edges.entry((native_to_view[&from].clone(), native_to_view[&to].clone()))
-                    .or_default().push((role, from, to));
+                edges
+                    .entry((native_to_view[&from].clone(), native_to_view[&to].clone()))
+                    .or_default()
+                    .push((role, from, to));
             }
             distances.entry(change.caller_view.clone()).or_insert(1);
             distances.entry(change.callee_view.clone()).or_insert(0);
-            edges.entry((change.caller_view.clone(), change.callee_view.clone()))
-                .or_default().push((role, caller.clone(), callee.clone()));
-            edge_status.insert((change.caller_view.clone(), change.callee_view.clone()), change.kind);
+            edges
+                .entry((change.caller_view.clone(), change.callee_view.clone()))
+                .or_default()
+                .push((role, caller.clone(), callee.clone()));
+            edge_status.insert(
+                (change.caller_view.clone(), change.callee_view.clone()),
+                change.kind,
+            );
         }
         changed_roots.sort();
         changed_roots.dedup();
@@ -159,15 +176,25 @@ impl AnalysisSession {
             nodes: distances.into_iter().collect(),
             edges: edges.keys().cloned().collect(),
         };
-        FocusedGraph { nodes, edges, edge_status, changed_roots, impact }
+        FocusedGraph {
+            nodes,
+            edges,
+            edge_status,
+            changed_roots,
+            impact,
+        }
     }
-    pub fn report(&self, mode: &CompareMode, depth: usize) -> Value {
+    pub fn report(&self, mode: &Comparison, depth: usize) -> Value {
         let comparison = match mode {
-            CompareMode::Local(args) => {
-                json!({"mode":"local", "selection": if args.staged { "staged" } else if args.unstaged { "unstaged" } else { "combined" }, "depth":depth})
+            Comparison::Local(selection) => {
+                json!({"mode":"local", "selection": match selection {
+                    LocalSelection::Combined => "combined",
+                    LocalSelection::Staged => "staged",
+                    LocalSelection::Unstaged => "unstaged",
+                }, "depth":depth})
             }
-            CompareMode::Branch(args) => {
-                json!({"mode":"branch", "base":args.base, "target":args.target, "depth":depth})
+            Comparison::Branch { base, target } => {
+                json!({"mode":"branch", "base":base, "target":target, "depth":depth})
             }
         };
         let file_changes: Vec<_> = self.capture.changes.iter().map(|change| json!({"path":path(&change.path), "kind":match change.kind { ChangeKind::Added => "added", ChangeKind::Modified => "modified", ChangeKind::Deleted => "deleted" }})).collect();
@@ -270,7 +297,7 @@ fn snapshot(s: &CapturedSnapshot) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{AnalyzeOptions, LocalArgs};
+    use crate::comparison::{Comparison, LocalSelection};
     use crate::git::{CapturedFile, FileChange, SnapshotPair};
     use std::collections::BTreeMap;
     fn snapshot(role: SnapshotRole, files: &[(&[u8], &[u8])]) -> CapturedSnapshot {
@@ -309,15 +336,8 @@ mod tests {
             true,
         )
     }
-    fn mode() -> CompareMode {
-        CompareMode::Local(LocalArgs {
-            staged: false,
-            unstaged: false,
-            options: AnalyzeOptions {
-                format: None,
-                depth: 2,
-            },
-        })
+    fn mode() -> Comparison {
+        Comparison::Local(LocalSelection::Combined)
     }
     #[test]
     fn certain_python_retarget_is_edge_only_but_arguments_are_nodes() {

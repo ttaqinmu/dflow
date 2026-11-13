@@ -1,4 +1,4 @@
-use crate::cli::CompareMode;
+use crate::comparison::{Comparison, LocalSelection};
 use git2::{ErrorCode, ObjectType, Oid, Repository};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -520,16 +520,16 @@ fn changes(base: &CapturedSnapshot, target: &CapturedSnapshot) -> Vec<FileChange
         .collect()
 }
 pub fn capture_comparison(
-    mode: &CompareMode,
+    mode: &Comparison,
     cwd: PathBuf,
     include_test: bool,
 ) -> Result<CaptureResult> {
     let repo = Repository::discover(cwd).map_err(input)?;
     let mut diagnostics = Vec::new();
     let pair = match mode {
-        CompareMode::Branch(args) => {
-            let (base_oid, base_name) = branch_oid(&repo, &args.base)?;
-            let (target_oid, target_name) = branch_oid(&repo, &args.target)?;
+        Comparison::Branch { base, target } => {
+            let (base_oid, base_name) = branch_oid(&repo, base)?;
+            let (target_oid, target_name) = branch_oid(&repo, target)?;
             SnapshotPair {
                 base: commit_snapshot(
                     &repo,
@@ -549,7 +549,7 @@ pub fn capture_comparison(
                 )?,
             }
         }
-        CompareMode::Local(args) => {
+        Comparison::Local(selection) => {
             if repo.is_bare() {
                 return Err(input("local mode requires a working tree"));
             }
@@ -558,12 +558,12 @@ pub fn capture_comparison(
             if index.has_conflicts() {
                 return Err(input("index has unresolved conflicts"));
             }
-            let base = if args.unstaged {
+            let base = if *selection == LocalSelection::Unstaged {
                 index_snapshot(&repo, SnapshotRole::Base, &mut diagnostics, include_test)?
             } else {
                 head_snapshot(&repo, &mut diagnostics, include_test)?
             };
-            let target = if args.staged {
+            let target = if *selection == LocalSelection::Staged {
                 index_snapshot(&repo, SnapshotRole::Target, &mut diagnostics, include_test)?
             } else {
                 let mut gitlinks: BTreeSet<_> = index
@@ -613,7 +613,7 @@ pub fn capture_comparison(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{AnalyzeOptions, BranchArgs, LocalArgs};
+    use crate::comparison::{Comparison, LocalSelection};
     use git2::Signature;
     use tempfile::TempDir;
 
@@ -639,17 +639,16 @@ mod tests {
         repo.commit(Some("HEAD"), &sig, &sig, "fixture", &tree, &refs)
             .unwrap()
     }
-    fn local(staged: bool, unstaged: bool) -> CompareMode {
-        CompareMode::Local(LocalArgs {
-            staged,
-            unstaged,
-            options: AnalyzeOptions {
-                format: None,
-                depth: 1,
-            },
+    fn local(staged: bool, unstaged: bool) -> Comparison {
+        Comparison::Local(if staged {
+            LocalSelection::Staged
+        } else if unstaged {
+            LocalSelection::Unstaged
+        } else {
+            LocalSelection::Combined
         })
     }
-    fn capture(mode: &CompareMode, dir: &TempDir) -> CaptureResult {
+    fn capture(mode: &Comparison, dir: &TempDir) -> CaptureResult {
         capture_comparison(mode, dir.path().to_path_buf(), true).unwrap()
     }
     fn body<'a>(snapshot: &'a CapturedSnapshot, path: &[u8]) -> Option<&'a [u8]> {
@@ -715,14 +714,10 @@ mod tests {
         repo.branch("target", &repo.find_commit(target).unwrap(), false)
             .unwrap();
         fs::write(dir.path().join("a.py"), b"dirty").unwrap();
-        let mode = CompareMode::Branch(BranchArgs {
+        let mode = Comparison::Branch {
             base: "base".into(),
             target: "target".into(),
-            options: AnalyzeOptions {
-                format: None,
-                depth: 1,
-            },
-        });
+        };
         let result = capture(&mode, &dir);
         assert_eq!(body(&result.pair.base, b"a.py"), Some(&b"base"[..]));
         assert_eq!(body(&result.pair.target, b"a.py"), Some(&b"target"[..]));
@@ -768,14 +763,10 @@ mod tests {
     #[test]
     fn invalid_branch_and_bare_local_are_input_errors() {
         let (dir, _) = fixture();
-        let mode = CompareMode::Branch(BranchArgs {
+        let mode = Comparison::Branch {
             base: "missing".into(),
             target: "also-missing".into(),
-            options: AnalyzeOptions {
-                format: None,
-                depth: 1,
-            },
-        });
+        };
         assert_eq!(
             capture_comparison(&mode, dir.path().to_path_buf(), true)
                 .unwrap_err()
@@ -838,28 +829,20 @@ mod tests {
         let oid = commit(&repo, "a.py");
         repo.reference("refs/remotes/origin/base", oid, false, "fixture")
             .unwrap();
-        let mode = CompareMode::Branch(BranchArgs {
+        let mode = Comparison::Branch {
             base: "origin/base".into(),
             target: "refs/remotes/origin/base".into(),
-            options: AnalyzeOptions {
-                format: None,
-                depth: 1,
-            },
-        });
+        };
         let result = capture(&mode, &dir);
         assert_eq!(result.pair.base.commit_id, Some(oid));
         assert_eq!(
             result.pair.base.branch.as_deref(),
             Some("refs/remotes/origin/base")
         );
-        let bad = CompareMode::Branch(BranchArgs {
+        let bad = Comparison::Branch {
             base: "HEAD~1".into(),
             target: "origin/base".into(),
-            options: AnalyzeOptions {
-                format: None,
-                depth: 1,
-            },
-        });
+        };
         assert_eq!(
             capture_comparison(&bad, dir.path().to_path_buf(), true)
                 .unwrap_err()
@@ -953,14 +936,10 @@ mod tests {
         fs::write(dir.path().join("a.py"), b"main").unwrap();
         let main = commit(&repo, "a.py");
         let main_name = repo.head().unwrap().shorthand().unwrap().to_string();
-        let mode = CompareMode::Branch(BranchArgs {
+        let mode = Comparison::Branch {
             base: main_name,
             target: "feature".into(),
-            options: AnalyzeOptions {
-                format: None,
-                depth: 1,
-            },
-        });
+        };
         let result = capture(&mode, &dir);
         assert_eq!(result.pair.base.commit_id, Some(main));
         assert_eq!(result.pair.target.commit_id, Some(feature));

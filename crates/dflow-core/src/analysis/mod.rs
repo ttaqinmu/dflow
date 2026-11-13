@@ -418,7 +418,7 @@ mod tests {
     }
     #[test]
     fn extracts_functions_scopes_calls_and_imports() {
-        let src = include_bytes!("../../tests/fixtures/python/symbols.py");
+        let src = include_bytes!("../../../dflow/tests/fixtures/python/symbols.py");
         let snap = snapshot(
             SnapshotRole::Target,
             &[

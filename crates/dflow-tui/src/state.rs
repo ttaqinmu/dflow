@@ -1,16 +1,16 @@
 use super::layout;
-use crate::analysis::{SymbolChangeKind, SymbolKind};
-use crate::cli::CompareMode;
-use crate::git::SnapshotRole;
-use crate::graph::{EdgeChangeKind, EndpointIdentity, GraphNode, Impact, SnapshotGraph};
-use crate::report::{AnalysisSession, EdgeContributor, FocusedNode};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use dflow_core::analysis::{SymbolChangeKind, SymbolKind};
+use dflow_core::comparison::Comparison;
+use dflow_core::git::SnapshotRole;
+use dflow_core::graph::{EdgeChangeKind, EndpointIdentity, GraphNode, Impact, SnapshotGraph};
+use dflow_core::report::{AnalysisSession, EdgeContributor, FocusedNode};
 use ratatui::layout::Rect;
 use std::collections::BTreeMap;
 
 pub struct App<'a> {
     pub session: AnalysisSession,
-    pub mode: &'a CompareMode,
+    pub mode: &'a Comparison,
     pub nodes: BTreeMap<String, FocusedNode>,
     pub edges: BTreeMap<(String, String), Vec<EdgeContributor>>,
     pub edge_status: BTreeMap<(String, String), EdgeChangeKind>,
@@ -26,7 +26,7 @@ pub struct App<'a> {
     pub reload_error: Option<String>,
 }
 impl<'a> App<'a> {
-    pub fn new(session: AnalysisSession, mode: &'a CompareMode, depth: usize) -> Self {
+    pub fn new(session: AnalysisSession, mode: &'a Comparison, depth: usize) -> Self {
         let mut app = Self {
             session,
             mode,

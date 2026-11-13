@@ -1,5 +1,5 @@
-use crate::cli::CompareMode;
-use crate::languages;
+use dflow_core::comparison::{Comparison, LocalSelection};
+use dflow_core::languages;
 use git2::Repository;
 use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -109,7 +109,7 @@ pub struct ReloadWatch {
 }
 
 impl ReloadWatch {
-    pub fn new(mode: &CompareMode, discovery_dir: &Path) -> Self {
+    pub fn new(mode: &Comparison, discovery_dir: &Path) -> Self {
         let mut result = Self {
             watcher: None,
             receiver: None,
@@ -118,14 +118,14 @@ impl ReloadWatch {
             last_dirty: None,
             last_capture: Instant::now(),
         };
-        let CompareMode::Local(args) = mode else {
+        let Comparison::Local(selection) = mode else {
             return result;
         };
         let Ok(repo) = Repository::discover(discovery_dir) else {
             return result;
         };
         let paths = Paths {
-            workdir: if args.staged {
+            workdir: if *selection == LocalSelection::Staged {
                 None
             } else {
                 repo.workdir().map(Path::to_path_buf)
