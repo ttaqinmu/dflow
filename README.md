@@ -122,3 +122,5 @@ The root workspace contains `dflow-core` (headless snapshot/analysis/report/diag
 ### Testing approach
 
 Tests use small Python/Rust fixtures and temporary Git repositories to verify snapshot capture, symbol extraction, conservative call resolution, caller traversal, JSON references, source locations, package/module discovery, diagnostics, and terminal rendering. The [schema reference](docs/report-schema-v2.md) lists JSON fields and path encoding. [M4 validation](docs/m4-validation.md) records Python terminal, performance, and usability checks; [M5 validation](docs/m5-validation.md) records Rust checks and benchmarks.
+
+To find slow analysis stages, use `--profile-json PATH` with a headless JSON comparison, or run the repeated benchmark and [sampled flamegraph](docs/dflow-cpu-flamegraph.svg) described in [performance profiling](docs/performance-profiling.md).

@@ -5,6 +5,21 @@ use crate::graph::{self, SnapshotGraph};
 use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
+
+pub struct PhaseTiming {
+    pub name: &'static str,
+    pub duration: Duration,
+}
+
+fn record(timings: &mut Option<&mut Vec<PhaseTiming>>, name: &'static str, start: Instant) {
+    if let Some(timings) = timings.as_deref_mut() {
+        timings.push(PhaseTiming {
+            name,
+            duration: start.elapsed(),
+        });
+    }
+}
 
 pub type EdgeContributor = (SnapshotRole, String, String);
 
@@ -35,13 +50,36 @@ pub struct AnalysisSession {
 
 impl AnalysisSession {
     pub fn new(capture: CaptureResult) -> Self {
-        let base = analysis::extract_snapshot(&capture.pair.base);
-        let target = analysis::extract_snapshot(&capture.pair.target);
-        let mut changes = analysis::classify_symbols(&base, &target);
-        let base_graph = graph::build(&base);
-        let target_graph = graph::build(&target);
-        let edge_comparison = graph::compare_edges(&base_graph, &target_graph, &base, &target);
+        Self::build(capture, None)
+    }
 
+    pub fn new_profiled(capture: CaptureResult) -> (Self, Vec<PhaseTiming>) {
+        let mut timings = Vec::new();
+        let session = Self::build(capture, Some(&mut timings));
+        (session, timings)
+    }
+
+    fn build(capture: CaptureResult, mut timings: Option<&mut Vec<PhaseTiming>>) -> Self {
+        let start = Instant::now();
+        let base = analysis::extract_snapshot(&capture.pair.base);
+        record(&mut timings, "extract_base", start);
+        let start = Instant::now();
+        let target = analysis::extract_snapshot(&capture.pair.target);
+        record(&mut timings, "extract_target", start);
+        let start = Instant::now();
+        let mut changes = analysis::classify_symbols(&base, &target);
+        record(&mut timings, "classify_symbols", start);
+        let start = Instant::now();
+        let base_graph = graph::build(&base);
+        record(&mut timings, "graph_base", start);
+        let start = Instant::now();
+        let target_graph = graph::build(&target);
+        record(&mut timings, "graph_target", start);
+        let start = Instant::now();
+        let edge_comparison = graph::compare_edges(&base_graph, &target_graph, &base, &target);
+        record(&mut timings, "compare_edges", start);
+
+        let start = Instant::now();
         changes.changes.retain(|change| {
             let (Some(before), Some(after)) = (&change.before, &change.after) else {
                 return true;
@@ -60,6 +98,7 @@ impl AnalysisSession {
             !matches!((before_id, after_id), (Some(b), Some(a))
                 if graph::call_retargets_covered(&base_graph, &target_graph, b, a, &edge_comparison))
         });
+        record(&mut timings, "filter_changes", start);
 
         Self {
             capture,
@@ -214,6 +253,37 @@ impl AnalysisSession {
     }
 
     pub fn report(&self, mode: &Comparison, depth: usize) -> Value {
+        self.report_impl(mode, depth, None)
+    }
+
+    pub fn report_profiled(
+        &self,
+        mode: &Comparison,
+        depth: usize,
+    ) -> (Value, PhaseTiming, PhaseTiming) {
+        let start = Instant::now();
+        let mut traversal = Duration::ZERO;
+        let value = self.report_impl(mode, depth, Some(&mut traversal));
+        let assembly = start.elapsed().saturating_sub(traversal);
+        (
+            value,
+            PhaseTiming {
+                name: "impact_traversal",
+                duration: traversal,
+            },
+            PhaseTiming {
+                name: "report_assembly",
+                duration: assembly,
+            },
+        )
+    }
+
+    fn report_impl(
+        &self,
+        mode: &Comparison,
+        depth: usize,
+        mut traversal: Option<&mut Duration>,
+    ) -> Value {
         let comparison = match mode {
             Comparison::Local(selection) => {
                 json!({"mode":"local", "selection": match selection {
@@ -272,7 +342,11 @@ impl AnalysisSession {
             };
 
             if let Some(root) = root {
+                let started = traversal.as_ref().map(|_| Instant::now());
                 let impact = graph::callers(graph, root, depth);
+                if let (Some(started), Some(total)) = (started, traversal.as_deref_mut()) {
+                    *total += started.elapsed();
+                }
                 impacts.push(json!({"root":impact.root,"snapshot":role(graph.role),"nodes":impact.nodes.iter().map(|(id,d)|json!({"id":id,"depth":d})).collect::<Vec<_>>(),"edges":impact.edges.iter().map(|(from,to)|json!({"caller":from,"callee":to})).collect::<Vec<_>>()}));
             }
         }

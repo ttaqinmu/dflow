@@ -1,0 +1,1286 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-16T18:19:48.493963+00:00",
+  "machine": "macOS-26.5.1-arm64-arm-64bit-Mach-O / arm64 / arm",
+  "binary": "/Users/muttaqin/.herdr/worktrees/dflow/dflow-init/target/release/dflow",
+  "samples_per_workload": 10,
+  "warmups": 2,
+  "workloads": [
+    {
+      "name": "Python \u00b7 20 source files",
+      "samples": [
+        {
+          "elapsed_ns": 6896125,
+          "peak_rss_bytes": 11993088,
+          "stages_ns": {
+            "git_capture": 1746250,
+            "extract_base": 397750,
+            "extract_target": 301500,
+            "classify_symbols": 23791,
+            "graph_base": 39250,
+            "graph_target": 29584,
+            "compare_edges": 50583,
+            "filter_changes": 41,
+            "impact_traversal": 4875,
+            "report_assembly": 260000,
+            "json_serialization": 30000,
+            "output_write": 27875
+          },
+          "counts": {
+            "edges": 40,
+            "files": 20,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 7264833,
+          "peak_rss_bytes": 12042240,
+          "stages_ns": {
+            "git_capture": 1854958,
+            "extract_base": 353292,
+            "extract_target": 289583,
+            "classify_symbols": 21083,
+            "graph_base": 33000,
+            "graph_target": 24792,
+            "compare_edges": 56250,
+            "filter_changes": 42,
+            "impact_traversal": 4750,
+            "report_assembly": 256583,
+            "json_serialization": 29000,
+            "output_write": 21000
+          },
+          "counts": {
+            "edges": 40,
+            "files": 20,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6677583,
+          "peak_rss_bytes": 12009472,
+          "stages_ns": {
+            "git_capture": 1701833,
+            "extract_base": 345042,
+            "extract_target": 284708,
+            "classify_symbols": 21333,
+            "graph_base": 32709,
+            "graph_target": 28250,
+            "compare_edges": 52666,
+            "filter_changes": 42,
+            "impact_traversal": 5334,
+            "report_assembly": 243958,
+            "json_serialization": 28375,
+            "output_write": 16875
+          },
+          "counts": {
+            "edges": 40,
+            "files": 20,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6845834,
+          "peak_rss_bytes": 12042240,
+          "stages_ns": {
+            "git_capture": 1777458,
+            "extract_base": 346041,
+            "extract_target": 284000,
+            "classify_symbols": 19666,
+            "graph_base": 33459,
+            "graph_target": 25500,
+            "compare_edges": 52959,
+            "filter_changes": 42,
+            "impact_traversal": 5125,
+            "report_assembly": 268833,
+            "json_serialization": 29167,
+            "output_write": 20291
+          },
+          "counts": {
+            "edges": 40,
+            "files": 20,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6901875,
+          "peak_rss_bytes": 11976704,
+          "stages_ns": {
+            "git_capture": 1772083,
+            "extract_base": 349209,
+            "extract_target": 289750,
+            "classify_symbols": 22667,
+            "graph_base": 35375,
+            "graph_target": 27541,
+            "compare_edges": 51292,
+            "filter_changes": 42,
+            "impact_traversal": 5625,
+            "report_assembly": 265833,
+            "json_serialization": 28333,
+            "output_write": 19500
+          },
+          "counts": {
+            "edges": 40,
+            "files": 20,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6616125,
+          "peak_rss_bytes": 11976704,
+          "stages_ns": {
+            "git_capture": 1704458,
+            "extract_base": 366458,
+            "extract_target": 284125,
+            "classify_symbols": 20167,
+            "graph_base": 31166,
+            "graph_target": 23709,
+            "compare_edges": 53875,
+            "filter_changes": 83,
+            "impact_traversal": 4458,
+            "report_assembly": 264250,
+            "json_serialization": 28209,
+            "output_write": 22000
+          },
+          "counts": {
+            "edges": 40,
+            "files": 20,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6456125,
+          "peak_rss_bytes": 11943936,
+          "stages_ns": {
+            "git_capture": 1709375,
+            "extract_base": 345500,
+            "extract_target": 281917,
+            "classify_symbols": 21542,
+            "graph_base": 31083,
+            "graph_target": 31250,
+            "compare_edges": 48291,
+            "filter_changes": 42,
+            "impact_traversal": 5167,
+            "report_assembly": 252458,
+            "json_serialization": 27792,
+            "output_write": 16125
+          },
+          "counts": {
+            "edges": 40,
+            "files": 20,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6577333,
+          "peak_rss_bytes": 12025856,
+          "stages_ns": {
+            "git_capture": 1638542,
+            "extract_base": 416750,
+            "extract_target": 304542,
+            "classify_symbols": 23792,
+            "graph_base": 40791,
+            "graph_target": 31167,
+            "compare_edges": 50833,
+            "filter_changes": 42,
+            "impact_traversal": 4250,
+            "report_assembly": 251625,
+            "json_serialization": 27958,
+            "output_write": 24958
+          },
+          "counts": {
+            "edges": 40,
+            "files": 20,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6438292,
+          "peak_rss_bytes": 12009472,
+          "stages_ns": {
+            "git_capture": 1673959,
+            "extract_base": 343000,
+            "extract_target": 289708,
+            "classify_symbols": 21250,
+            "graph_base": 28375,
+            "graph_target": 23708,
+            "compare_edges": 47792,
+            "filter_changes": 42,
+            "impact_traversal": 4167,
+            "report_assembly": 236041,
+            "json_serialization": 26875,
+            "output_write": 14125
+          },
+          "counts": {
+            "edges": 40,
+            "files": 20,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6322167,
+          "peak_rss_bytes": 11927552,
+          "stages_ns": {
+            "git_capture": 1713875,
+            "extract_base": 341375,
+            "extract_target": 289500,
+            "classify_symbols": 22958,
+            "graph_base": 31917,
+            "graph_target": 27333,
+            "compare_edges": 49792,
+            "filter_changes": 83,
+            "impact_traversal": 4583,
+            "report_assembly": 253917,
+            "json_serialization": 27750,
+            "output_write": 19000
+          },
+          "counts": {
+            "edges": 40,
+            "files": 20,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "name": "Python \u00b7 100 source files",
+      "samples": [
+        {
+          "elapsed_ns": 13025917,
+          "peak_rss_bytes": 17285120,
+          "stages_ns": {
+            "git_capture": 4109875,
+            "extract_base": 1509458,
+            "extract_target": 1437750,
+            "classify_symbols": 82333,
+            "graph_base": 135875,
+            "graph_target": 142083,
+            "compare_edges": 229875,
+            "filter_changes": 83,
+            "impact_traversal": 16791,
+            "report_assembly": 1088750,
+            "json_serialization": 122458,
+            "output_write": 21750
+          },
+          "counts": {
+            "edges": 200,
+            "files": 100,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 12990042,
+          "peak_rss_bytes": 17235968,
+          "stages_ns": {
+            "git_capture": 4144458,
+            "extract_base": 1535792,
+            "extract_target": 1369792,
+            "classify_symbols": 77042,
+            "graph_base": 132458,
+            "graph_target": 118542,
+            "compare_edges": 225500,
+            "filter_changes": 83,
+            "impact_traversal": 17209,
+            "report_assembly": 1063999,
+            "json_serialization": 121333,
+            "output_write": 21000
+          },
+          "counts": {
+            "edges": 200,
+            "files": 100,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 12937458,
+          "peak_rss_bytes": 17285120,
+          "stages_ns": {
+            "git_capture": 4346750,
+            "extract_base": 1431375,
+            "extract_target": 1398334,
+            "classify_symbols": 74583,
+            "graph_base": 180292,
+            "graph_target": 120000,
+            "compare_edges": 219208,
+            "filter_changes": 125,
+            "impact_traversal": 16333,
+            "report_assembly": 1072083,
+            "json_serialization": 124417,
+            "output_write": 26291
+          },
+          "counts": {
+            "edges": 200,
+            "files": 100,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 13393000,
+          "peak_rss_bytes": 17334272,
+          "stages_ns": {
+            "git_capture": 4444917,
+            "extract_base": 1462583,
+            "extract_target": 1416166,
+            "classify_symbols": 82333,
+            "graph_base": 136083,
+            "graph_target": 122292,
+            "compare_edges": 245000,
+            "filter_changes": 208,
+            "impact_traversal": 16084,
+            "report_assembly": 1147374,
+            "json_serialization": 133000,
+            "output_write": 21250
+          },
+          "counts": {
+            "edges": 200,
+            "files": 100,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 13926709,
+          "peak_rss_bytes": 17235968,
+          "stages_ns": {
+            "git_capture": 4531667,
+            "extract_base": 1641584,
+            "extract_target": 1591125,
+            "classify_symbols": 78375,
+            "graph_base": 140333,
+            "graph_target": 125875,
+            "compare_edges": 237750,
+            "filter_changes": 167,
+            "impact_traversal": 16625,
+            "report_assembly": 1162042,
+            "json_serialization": 127792,
+            "output_write": 27416
+          },
+          "counts": {
+            "edges": 200,
+            "files": 100,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 13743833,
+          "peak_rss_bytes": 17285120,
+          "stages_ns": {
+            "git_capture": 4618292,
+            "extract_base": 1462583,
+            "extract_target": 1443666,
+            "classify_symbols": 82208,
+            "graph_base": 146917,
+            "graph_target": 120125,
+            "compare_edges": 230459,
+            "filter_changes": 125,
+            "impact_traversal": 16709,
+            "report_assembly": 1110124,
+            "json_serialization": 128541,
+            "output_write": 21208
+          },
+          "counts": {
+            "edges": 200,
+            "files": 100,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 13420792,
+          "peak_rss_bytes": 17268736,
+          "stages_ns": {
+            "git_capture": 4333875,
+            "extract_base": 1454125,
+            "extract_target": 1426542,
+            "classify_symbols": 85292,
+            "graph_base": 144416,
+            "graph_target": 125875,
+            "compare_edges": 234208,
+            "filter_changes": 84,
+            "impact_traversal": 16541,
+            "report_assembly": 1086917,
+            "json_serialization": 119500,
+            "output_write": 20500
+          },
+          "counts": {
+            "edges": 200,
+            "files": 100,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 12865583,
+          "peak_rss_bytes": 17252352,
+          "stages_ns": {
+            "git_capture": 4190875,
+            "extract_base": 1465958,
+            "extract_target": 1386875,
+            "classify_symbols": 75292,
+            "graph_base": 133417,
+            "graph_target": 121542,
+            "compare_edges": 252000,
+            "filter_changes": 83,
+            "impact_traversal": 16416,
+            "report_assembly": 1130959,
+            "json_serialization": 121041,
+            "output_write": 20458
+          },
+          "counts": {
+            "edges": 200,
+            "files": 100,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 13178209,
+          "peak_rss_bytes": 17252352,
+          "stages_ns": {
+            "git_capture": 4510708,
+            "extract_base": 1455250,
+            "extract_target": 1378500,
+            "classify_symbols": 76833,
+            "graph_base": 125000,
+            "graph_target": 111041,
+            "compare_edges": 219875,
+            "filter_changes": 125,
+            "impact_traversal": 16708,
+            "report_assembly": 1057876,
+            "json_serialization": 122166,
+            "output_write": 24000
+          },
+          "counts": {
+            "edges": 200,
+            "files": 100,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 13352875,
+          "peak_rss_bytes": 17219584,
+          "stages_ns": {
+            "git_capture": 4521959,
+            "extract_base": 1482084,
+            "extract_target": 1431292,
+            "classify_symbols": 82834,
+            "graph_base": 136333,
+            "graph_target": 115667,
+            "compare_edges": 227084,
+            "filter_changes": 83,
+            "impact_traversal": 17125,
+            "report_assembly": 1067209,
+            "json_serialization": 125000,
+            "output_write": 26542
+          },
+          "counts": {
+            "edges": 200,
+            "files": 100,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "name": "Rust \u00b7 20 source files",
+      "samples": [
+        {
+          "elapsed_ns": 6970417,
+          "peak_rss_bytes": 12435456,
+          "stages_ns": {
+            "git_capture": 1807708,
+            "extract_base": 519500,
+            "extract_target": 438458,
+            "classify_symbols": 25375,
+            "graph_base": 39458,
+            "graph_target": 26833,
+            "compare_edges": 55250,
+            "filter_changes": 83,
+            "impact_traversal": 4667,
+            "report_assembly": 250749,
+            "json_serialization": 31459,
+            "output_write": 21625
+          },
+          "counts": {
+            "edges": 40,
+            "files": 21,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 7156917,
+          "peak_rss_bytes": 12451840,
+          "stages_ns": {
+            "git_capture": 1875584,
+            "extract_base": 518417,
+            "extract_target": 429375,
+            "classify_symbols": 25542,
+            "graph_base": 36458,
+            "graph_target": 27375,
+            "compare_edges": 59208,
+            "filter_changes": 41,
+            "impact_traversal": 5416,
+            "report_assembly": 253876,
+            "json_serialization": 35750,
+            "output_write": 16958
+          },
+          "counts": {
+            "edges": 40,
+            "files": 21,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 7108417,
+          "peak_rss_bytes": 12419072,
+          "stages_ns": {
+            "git_capture": 2035584,
+            "extract_base": 528584,
+            "extract_target": 428334,
+            "classify_symbols": 24709,
+            "graph_base": 36958,
+            "graph_target": 25542,
+            "compare_edges": 56125,
+            "filter_changes": 84,
+            "impact_traversal": 4375,
+            "report_assembly": 246250,
+            "json_serialization": 31833,
+            "output_write": 18583
+          },
+          "counts": {
+            "edges": 40,
+            "files": 21,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6928708,
+          "peak_rss_bytes": 12419072,
+          "stages_ns": {
+            "git_capture": 1761125,
+            "extract_base": 499250,
+            "extract_target": 429083,
+            "classify_symbols": 23166,
+            "graph_base": 34834,
+            "graph_target": 27167,
+            "compare_edges": 54542,
+            "filter_changes": 84,
+            "impact_traversal": 4458,
+            "report_assembly": 244375,
+            "json_serialization": 31208,
+            "output_write": 22292
+          },
+          "counts": {
+            "edges": 40,
+            "files": 21,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6793500,
+          "peak_rss_bytes": 12451840,
+          "stages_ns": {
+            "git_capture": 1751459,
+            "extract_base": 502792,
+            "extract_target": 428958,
+            "classify_symbols": 23667,
+            "graph_base": 34959,
+            "graph_target": 26500,
+            "compare_edges": 55666,
+            "filter_changes": 84,
+            "impact_traversal": 4334,
+            "report_assembly": 245333,
+            "json_serialization": 30583,
+            "output_write": 16084
+          },
+          "counts": {
+            "edges": 40,
+            "files": 21,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6818250,
+          "peak_rss_bytes": 12451840,
+          "stages_ns": {
+            "git_capture": 1787292,
+            "extract_base": 511125,
+            "extract_target": 418459,
+            "classify_symbols": 23250,
+            "graph_base": 35500,
+            "graph_target": 25583,
+            "compare_edges": 56000,
+            "filter_changes": 42,
+            "impact_traversal": 4417,
+            "report_assembly": 246041,
+            "json_serialization": 30708,
+            "output_write": 16583
+          },
+          "counts": {
+            "edges": 40,
+            "files": 21,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6849958,
+          "peak_rss_bytes": 12500992,
+          "stages_ns": {
+            "git_capture": 1791458,
+            "extract_base": 502167,
+            "extract_target": 427125,
+            "classify_symbols": 24500,
+            "graph_base": 34542,
+            "graph_target": 25000,
+            "compare_edges": 56291,
+            "filter_changes": 42,
+            "impact_traversal": 4458,
+            "report_assembly": 251750,
+            "json_serialization": 31292,
+            "output_write": 16292
+          },
+          "counts": {
+            "edges": 40,
+            "files": 21,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6806917,
+          "peak_rss_bytes": 12517376,
+          "stages_ns": {
+            "git_capture": 1767834,
+            "extract_base": 509375,
+            "extract_target": 423125,
+            "classify_symbols": 23542,
+            "graph_base": 36250,
+            "graph_target": 25125,
+            "compare_edges": 56625,
+            "filter_changes": 84,
+            "impact_traversal": 4375,
+            "report_assembly": 235916,
+            "json_serialization": 31417,
+            "output_write": 16791
+          },
+          "counts": {
+            "edges": 40,
+            "files": 21,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 7049792,
+          "peak_rss_bytes": 12500992,
+          "stages_ns": {
+            "git_capture": 1776333,
+            "extract_base": 502584,
+            "extract_target": 442042,
+            "classify_symbols": 24792,
+            "graph_base": 33625,
+            "graph_target": 24417,
+            "compare_edges": 55417,
+            "filter_changes": 83,
+            "impact_traversal": 5000,
+            "report_assembly": 237167,
+            "json_serialization": 32041,
+            "output_write": 17916
+          },
+          "counts": {
+            "edges": 40,
+            "files": 21,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 6884750,
+          "peak_rss_bytes": 12419072,
+          "stages_ns": {
+            "git_capture": 1812292,
+            "extract_base": 503333,
+            "extract_target": 428834,
+            "classify_symbols": 27375,
+            "graph_base": 35917,
+            "graph_target": 25750,
+            "compare_edges": 57958,
+            "filter_changes": 42,
+            "impact_traversal": 4541,
+            "report_assembly": 266209,
+            "json_serialization": 38084,
+            "output_write": 17084
+          },
+          "counts": {
+            "edges": 40,
+            "files": 21,
+            "symbols": 40
+          },
+          "complete": true,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "name": "Rust \u00b7 100 source files",
+      "samples": [
+        {
+          "elapsed_ns": 16051500,
+          "peak_rss_bytes": 17743872,
+          "stages_ns": {
+            "git_capture": 4798250,
+            "extract_base": 2180083,
+            "extract_target": 2127458,
+            "classify_symbols": 98625,
+            "graph_base": 232125,
+            "graph_target": 134084,
+            "compare_edges": 255000,
+            "filter_changes": 167,
+            "impact_traversal": 28417,
+            "report_assembly": 1338166,
+            "json_serialization": 136833,
+            "output_write": 49792
+          },
+          "counts": {
+            "edges": 200,
+            "files": 101,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 23564083,
+          "peak_rss_bytes": 17743872,
+          "stages_ns": {
+            "git_capture": 11231958,
+            "extract_base": 2263916,
+            "extract_target": 2057666,
+            "classify_symbols": 96083,
+            "graph_base": 155334,
+            "graph_target": 129958,
+            "compare_edges": 247250,
+            "filter_changes": 125,
+            "impact_traversal": 27542,
+            "report_assembly": 1171500,
+            "json_serialization": 130542,
+            "output_write": 28292
+          },
+          "counts": {
+            "edges": 200,
+            "files": 101,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 40386375,
+          "peak_rss_bytes": 17694720,
+          "stages_ns": {
+            "git_capture": 18812833,
+            "extract_base": 5796291,
+            "extract_target": 2356250,
+            "classify_symbols": 98458,
+            "graph_base": 234792,
+            "graph_target": 148209,
+            "compare_edges": 409709,
+            "filter_changes": 167,
+            "impact_traversal": 18042,
+            "report_assembly": 1136749,
+            "json_serialization": 150667,
+            "output_write": 4194583
+          },
+          "counts": {
+            "edges": 200,
+            "files": 101,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 25883500,
+          "peak_rss_bytes": 17809408,
+          "stages_ns": {
+            "git_capture": 11419208,
+            "extract_base": 2451625,
+            "extract_target": 2314417,
+            "classify_symbols": 103750,
+            "graph_base": 183167,
+            "graph_target": 141500,
+            "compare_edges": 327500,
+            "filter_changes": 125,
+            "impact_traversal": 20000,
+            "report_assembly": 1271542,
+            "json_serialization": 146167,
+            "output_write": 78583
+          },
+          "counts": {
+            "edges": 200,
+            "files": 101,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 32310583,
+          "peak_rss_bytes": 17760256,
+          "stages_ns": {
+            "git_capture": 12501917,
+            "extract_base": 2308292,
+            "extract_target": 2642375,
+            "classify_symbols": 101417,
+            "graph_base": 168709,
+            "graph_target": 172417,
+            "compare_edges": 316750,
+            "filter_changes": 125,
+            "impact_traversal": 17292,
+            "report_assembly": 1445375,
+            "json_serialization": 177333,
+            "output_write": 49167
+          },
+          "counts": {
+            "edges": 200,
+            "files": 101,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 23870708,
+          "peak_rss_bytes": 17776640,
+          "stages_ns": {
+            "git_capture": 7233750,
+            "extract_base": 2282083,
+            "extract_target": 2053042,
+            "classify_symbols": 96250,
+            "graph_base": 151125,
+            "graph_target": 136000,
+            "compare_edges": 256000,
+            "filter_changes": 250,
+            "impact_traversal": 16875,
+            "report_assembly": 1430083,
+            "json_serialization": 156334,
+            "output_write": 41791
+          },
+          "counts": {
+            "edges": 200,
+            "files": 101,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 26715917,
+          "peak_rss_bytes": 17809408,
+          "stages_ns": {
+            "git_capture": 7042708,
+            "extract_base": 2376458,
+            "extract_target": 3432583,
+            "classify_symbols": 642000,
+            "graph_base": 182666,
+            "graph_target": 150417,
+            "compare_edges": 275334,
+            "filter_changes": 208,
+            "impact_traversal": 18584,
+            "report_assembly": 1359750,
+            "json_serialization": 136541,
+            "output_write": 45833
+          },
+          "counts": {
+            "edges": 200,
+            "files": 101,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 19783084,
+          "peak_rss_bytes": 17727488,
+          "stages_ns": {
+            "git_capture": 5734250,
+            "extract_base": 2312500,
+            "extract_target": 2289875,
+            "classify_symbols": 104167,
+            "graph_base": 158916,
+            "graph_target": 147167,
+            "compare_edges": 263167,
+            "filter_changes": 208,
+            "impact_traversal": 18791,
+            "report_assembly": 1271543,
+            "json_serialization": 355875,
+            "output_write": 38750
+          },
+          "counts": {
+            "edges": 200,
+            "files": 101,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 17805709,
+          "peak_rss_bytes": 17842176,
+          "stages_ns": {
+            "git_capture": 5115375,
+            "extract_base": 2294375,
+            "extract_target": 2328709,
+            "classify_symbols": 108208,
+            "graph_base": 231500,
+            "graph_target": 180917,
+            "compare_edges": 278541,
+            "filter_changes": 208,
+            "impact_traversal": 17750,
+            "report_assembly": 1347041,
+            "json_serialization": 258250,
+            "output_write": 39875
+          },
+          "counts": {
+            "edges": 200,
+            "files": 101,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 21370083,
+          "peak_rss_bytes": 17760256,
+          "stages_ns": {
+            "git_capture": 5211250,
+            "extract_base": 2407500,
+            "extract_target": 2097708,
+            "classify_symbols": 103292,
+            "graph_base": 161500,
+            "graph_target": 135916,
+            "compare_edges": 261667,
+            "filter_changes": 208,
+            "impact_traversal": 17375,
+            "report_assembly": 1250750,
+            "json_serialization": 189584,
+            "output_write": 40583
+          },
+          "counts": {
+            "edges": 200,
+            "files": 101,
+            "symbols": 200
+          },
+          "complete": true,
+          "exit_code": 0
+        }
+      ]
+    },
+    {
+      "name": "Repository \u00b7 dflow-init (local)",
+      "samples": [
+        {
+          "elapsed_ns": 238826583,
+          "peak_rss_bytes": 99696640,
+          "stages_ns": {
+            "git_capture": 6374625,
+            "extract_base": 96640000,
+            "extract_target": 99619042,
+            "classify_symbols": 314250,
+            "graph_base": 1519583,
+            "graph_target": 1577500,
+            "compare_edges": 566667,
+            "filter_changes": 541,
+            "impact_traversal": 13916,
+            "report_assembly": 17774417,
+            "json_serialization": 5272792,
+            "output_write": 259541
+          },
+          "counts": {
+            "edges": 291,
+            "files": 31,
+            "symbols": 495
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 242186292,
+          "peak_rss_bytes": 99713024,
+          "stages_ns": {
+            "git_capture": 5905458,
+            "extract_base": 97022209,
+            "extract_target": 100958084,
+            "classify_symbols": 259917,
+            "graph_base": 1505833,
+            "graph_target": 1572417,
+            "compare_edges": 528459,
+            "filter_changes": 750,
+            "impact_traversal": 11371,
+            "report_assembly": 19033712,
+            "json_serialization": 5269500,
+            "output_write": 267083
+          },
+          "counts": {
+            "edges": 291,
+            "files": 31,
+            "symbols": 495
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 242518583,
+          "peak_rss_bytes": 99860480,
+          "stages_ns": {
+            "git_capture": 6065042,
+            "extract_base": 97539958,
+            "extract_target": 102123333,
+            "classify_symbols": 248375,
+            "graph_base": 1465125,
+            "graph_target": 1468750,
+            "compare_edges": 551625,
+            "filter_changes": 1000,
+            "impact_traversal": 10707,
+            "report_assembly": 18067543,
+            "json_serialization": 4717125,
+            "output_write": 304166
+          },
+          "counts": {
+            "edges": 291,
+            "files": 31,
+            "symbols": 495
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 238643083,
+          "peak_rss_bytes": 99663872,
+          "stages_ns": {
+            "git_capture": 5949792,
+            "extract_base": 97433958,
+            "extract_target": 100321042,
+            "classify_symbols": 271125,
+            "graph_base": 1512708,
+            "graph_target": 1477958,
+            "compare_edges": 539375,
+            "filter_changes": 833,
+            "impact_traversal": 13459,
+            "report_assembly": 17168500,
+            "json_serialization": 3044917,
+            "output_write": 368667
+          },
+          "counts": {
+            "edges": 291,
+            "files": 31,
+            "symbols": 495
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 237293500,
+          "peak_rss_bytes": 99647488,
+          "stages_ns": {
+            "git_capture": 5970583,
+            "extract_base": 96956292,
+            "extract_target": 100558583,
+            "classify_symbols": 258500,
+            "graph_base": 1549291,
+            "graph_target": 1538042,
+            "compare_edges": 549875,
+            "filter_changes": 584,
+            "impact_traversal": 11251,
+            "report_assembly": 17535374,
+            "json_serialization": 2973250,
+            "output_write": 268958
+          },
+          "counts": {
+            "edges": 291,
+            "files": 31,
+            "symbols": 495
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 244955541,
+          "peak_rss_bytes": 99762176,
+          "stages_ns": {
+            "git_capture": 6038334,
+            "extract_base": 97524167,
+            "extract_target": 101034167,
+            "classify_symbols": 284375,
+            "graph_base": 1521875,
+            "graph_target": 1522458,
+            "compare_edges": 555334,
+            "filter_changes": 1084,
+            "impact_traversal": 11621,
+            "report_assembly": 17278213,
+            "json_serialization": 3310167,
+            "output_write": 304333
+          },
+          "counts": {
+            "edges": 291,
+            "files": 31,
+            "symbols": 495
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 250849500,
+          "peak_rss_bytes": 99811328,
+          "stages_ns": {
+            "git_capture": 5978750,
+            "extract_base": 97314875,
+            "extract_target": 100745584,
+            "classify_symbols": 277209,
+            "graph_base": 1514917,
+            "graph_target": 1511375,
+            "compare_edges": 542459,
+            "filter_changes": 1292,
+            "impact_traversal": 11042,
+            "report_assembly": 22886458,
+            "json_serialization": 4986916,
+            "output_write": 251416
+          },
+          "counts": {
+            "edges": 291,
+            "files": 31,
+            "symbols": 495
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 237786125,
+          "peak_rss_bytes": 99762176,
+          "stages_ns": {
+            "git_capture": 5998375,
+            "extract_base": 98157708,
+            "extract_target": 100675791,
+            "classify_symbols": 293167,
+            "graph_base": 1548209,
+            "graph_target": 1505125,
+            "compare_edges": 545125,
+            "filter_changes": 917,
+            "impact_traversal": 11711,
+            "report_assembly": 17217830,
+            "json_serialization": 2947334,
+            "output_write": 248292
+          },
+          "counts": {
+            "edges": 291,
+            "files": 31,
+            "symbols": 495
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 239833042,
+          "peak_rss_bytes": 99762176,
+          "stages_ns": {
+            "git_capture": 6088542,
+            "extract_base": 97197125,
+            "extract_target": 100244750,
+            "classify_symbols": 291916,
+            "graph_base": 1467792,
+            "graph_target": 1492875,
+            "compare_edges": 566625,
+            "filter_changes": 459,
+            "impact_traversal": 11587,
+            "report_assembly": 17853163,
+            "json_serialization": 4879583,
+            "output_write": 304875
+          },
+          "counts": {
+            "edges": 291,
+            "files": 31,
+            "symbols": 495
+          },
+          "complete": true,
+          "exit_code": 0
+        },
+        {
+          "elapsed_ns": 237938167,
+          "peak_rss_bytes": 99680256,
+          "stages_ns": {
+            "git_capture": 5838334,
+            "extract_base": 96628250,
+            "extract_target": 101062625,
+            "classify_symbols": 270459,
+            "graph_base": 1488167,
+            "graph_target": 1465666,
+            "compare_edges": 528417,
+            "filter_changes": 542,
+            "impact_traversal": 11290,
+            "report_assembly": 17009502,
+            "json_serialization": 3834208,
+            "output_write": 269583
+          },
+          "counts": {
+            "edges": 291,
+            "files": 31,
+            "symbols": 495
+          },
+          "complete": true,
+          "exit_code": 0
+        }
+      ]
+    }
+  ],
+  "flamegraph": "dflow-cpu-flamegraph.svg"
+}
