@@ -1,4 +1,5 @@
 use crate::comparison::{Comparison, LocalSelection};
+use crate::config::Config;
 use anyhow::Context;
 use git2::{ErrorCode, ObjectType, Oid, Repository};
 use sha2::{Digest, Sha256};
@@ -114,8 +115,9 @@ impl CaptureError {
 
 type Result<T> = std::result::Result<T, CaptureError>;
 
-fn relevant(path: &[u8], include_test: bool) -> bool {
-    (include_test || !crate::languages::is_test_path(path)) && crate::languages::capture_path(path)
+fn relevant(path: &[u8]) -> bool {
+    (Config::current().include_test || !crate::languages::is_test_path(path))
+        && crate::languages::capture_path(path)
 }
 
 fn insert_blob(
@@ -124,9 +126,8 @@ fn insert_blob(
     path: Vec<u8>,
     oid: Oid,
     mode: u32,
-    include_test: bool,
 ) -> Result<()> {
-    if relevant(&path, include_test) {
+    if relevant(&path) {
         let blob = repo
             .find_blob(oid)
             .map_err(|e| CaptureError::Analysis(e.into()))?;
@@ -148,7 +149,6 @@ fn walk_tree(
     prefix: &[u8],
     files: &mut BTreeMap<Vec<u8>, CapturedFile>,
     diagnostics: &mut Vec<Diagnostic>,
-    include_test: bool,
 ) -> Result<()> {
     for entry in tree.iter() {
         let mut path = prefix.to_vec();
@@ -159,24 +159,19 @@ fn walk_tree(
                 let child = repo
                     .find_tree(entry.id())
                     .map_err(|e| CaptureError::Analysis(e.into()))?;
-                walk_tree(repo, &child, &path, files, diagnostics, include_test)?;
+                walk_tree(repo, &child, &path, files, diagnostics)?;
             }
             Some(ObjectType::Blob) if entry.filemode() == 0o120000 => {
-                if relevant(&path, include_test) {
+                if relevant(&path) {
                     diagnostics.push(Diagnostic {
                         path,
                         message: "symlink source skipped".into(),
                     });
                 }
             }
-            Some(ObjectType::Blob) => insert_blob(
-                repo,
-                files,
-                path,
-                entry.id(),
-                entry.filemode() as u32,
-                include_test,
-            )?,
+            Some(ObjectType::Blob) => {
+                insert_blob(repo, files, path, entry.id(), entry.filemode() as u32)?
+            }
             Some(ObjectType::Commit) => diagnostics.push(Diagnostic {
                 path,
                 message: "submodule skipped".into(),
@@ -220,7 +215,6 @@ fn discover_untracked(
     tracked: &BTreeSet<Vec<u8>>,
     gitlinks: &BTreeSet<Vec<u8>>,
     candidates: &mut BTreeSet<Vec<u8>>,
-    include_test: bool,
 ) -> Result<()> {
     for item in fs::read_dir(dir)
         .with_context(|| format!("cannot read directory {}", dir.display()))
@@ -258,17 +252,9 @@ fn discover_untracked(
                 continue;
             }
 
-            discover_untracked(
-                repo,
-                root,
-                &path,
-                tracked,
-                gitlinks,
-                candidates,
-                include_test,
-            )?;
+            discover_untracked(repo, root, &path, tracked, gitlinks, candidates)?;
         } else if metadata.is_file()
-            && relevant(&raw, include_test)
+            && relevant(&raw)
             && !tracked.contains(&raw)
             && !repo
                 .is_path_ignored(relative)
@@ -366,7 +352,6 @@ impl CapturedSnapshot {
         role: SnapshotRole,
         branch: Option<String>,
         diagnostics: &mut Vec<Diagnostic>,
-        include_test: bool,
     ) -> Result<Self> {
         let commit = repo
             .find_commit(oid)
@@ -376,7 +361,7 @@ impl CapturedSnapshot {
             .map_err(|e| CaptureError::Analysis(e.into()))?;
         let mut files = BTreeMap::new();
 
-        walk_tree(repo, &tree, b"", &mut files, diagnostics, include_test)?;
+        walk_tree(repo, &tree, b"", &mut files, diagnostics)?;
 
         let content_id = Self::generate_content_id(&files);
 
@@ -390,25 +375,14 @@ impl CapturedSnapshot {
         })
     }
 
-    fn from_head(
-        repo: &Repository,
-        diagnostics: &mut Vec<Diagnostic>,
-        include_test: bool,
-    ) -> Result<Self> {
+    fn from_head(repo: &Repository, diagnostics: &mut Vec<Diagnostic>) -> Result<Self> {
         match repo.head() {
             Ok(head) => {
                 let oid = head
                     .peel_to_commit()
                     .map_err(|e| CaptureError::Analysis(e.into()))?
                     .id();
-                Self::from_commit(
-                    repo,
-                    oid,
-                    SnapshotRole::Base,
-                    None,
-                    diagnostics,
-                    include_test,
-                )
+                Self::from_commit(repo, oid, SnapshotRole::Base, None, diagnostics)
             }
             Err(e) if e.code() == ErrorCode::UnbornBranch => {
                 let content_id = Self::generate_content_id(&BTreeMap::new());
@@ -429,7 +403,6 @@ impl CapturedSnapshot {
         repo: &Repository,
         role: SnapshotRole,
         diagnostics: &mut Vec<Diagnostic>,
-        include_test: bool,
     ) -> Result<Self> {
         let index = repo.index().map_err(|e| CaptureError::Analysis(e.into()))?;
         if index.has_conflicts() {
@@ -443,7 +416,7 @@ impl CapturedSnapshot {
             }
 
             if entry.mode == 0o120000 {
-                if relevant(&entry.path, include_test) {
+                if relevant(&entry.path) {
                     diagnostics.push(Diagnostic {
                         path: entry.path,
                         message: "symlink source skipped".into(),
@@ -460,14 +433,7 @@ impl CapturedSnapshot {
                 continue;
             }
 
-            insert_blob(
-                repo,
-                &mut files,
-                entry.path,
-                entry.id,
-                entry.mode,
-                include_test,
-            )?;
+            insert_blob(repo, &mut files, entry.path, entry.id, entry.mode)?;
         }
 
         let content_id = Self::generate_content_id(&files);
@@ -487,7 +453,6 @@ impl CapturedSnapshot {
         tracked: &BTreeSet<Vec<u8>>,
         gitlinks: &BTreeSet<Vec<u8>>,
         diagnostics: &mut Vec<Diagnostic>,
-        include_test: bool,
     ) -> Result<Self> {
         let root = repo
             .workdir()
@@ -495,19 +460,11 @@ impl CapturedSnapshot {
 
         let mut candidates: BTreeSet<_> = tracked.difference(gitlinks).cloned().collect();
 
-        discover_untracked(
-            repo,
-            root,
-            root,
-            tracked,
-            gitlinks,
-            &mut candidates,
-            include_test,
-        )?;
+        discover_untracked(repo, root, root, tracked, gitlinks, &mut candidates)?;
 
         let mut files = BTreeMap::new();
         for path in candidates {
-            if !relevant(&path, include_test) {
+            if !relevant(&path) {
                 continue;
             }
 
@@ -600,11 +557,7 @@ fn changes(base: &CapturedSnapshot, target: &CapturedSnapshot) -> Vec<FileChange
         .collect()
 }
 
-pub fn capture_comparison(
-    mode: &Comparison,
-    cwd: PathBuf,
-    include_test: bool,
-) -> Result<CaptureResult> {
+pub fn capture_comparison(mode: &Comparison, cwd: PathBuf) -> Result<CaptureResult> {
     let repo = Repository::discover(cwd).map_err(|e| CaptureError::Input(e.to_string()))?;
     let mut diagnostics = Vec::new();
 
@@ -619,7 +572,6 @@ pub fn capture_comparison(
                     SnapshotRole::Base,
                     Some(base_name),
                     &mut diagnostics,
-                    include_test,
                 )?,
                 target: CapturedSnapshot::from_commit(
                     &repo,
@@ -627,7 +579,6 @@ pub fn capture_comparison(
                     SnapshotRole::Target,
                     Some(target_name),
                     &mut diagnostics,
-                    include_test,
                 )?,
             }
         }
@@ -644,23 +595,13 @@ pub fn capture_comparison(
             }
 
             let base = if *selection == LocalSelection::Unstaged {
-                CapturedSnapshot::from_index(
-                    &repo,
-                    SnapshotRole::Base,
-                    &mut diagnostics,
-                    include_test,
-                )?
+                CapturedSnapshot::from_index(&repo, SnapshotRole::Base, &mut diagnostics)?
             } else {
-                CapturedSnapshot::from_head(&repo, &mut diagnostics, include_test)?
+                CapturedSnapshot::from_head(&repo, &mut diagnostics)?
             };
 
             let target = if *selection == LocalSelection::Staged {
-                CapturedSnapshot::from_index(
-                    &repo,
-                    SnapshotRole::Target,
-                    &mut diagnostics,
-                    include_test,
-                )?
+                CapturedSnapshot::from_index(&repo, SnapshotRole::Target, &mut diagnostics)?
             } else {
                 let mut gitlinks: BTreeSet<_> = index
                     .iter()
@@ -695,13 +636,14 @@ pub fn capture_comparison(
                     &tracked,
                     &gitlinks,
                     &mut diagnostics,
-                    include_test,
                 )?
             };
             SnapshotPair { base, target }
         }
     };
-    diagnostics.retain(|item| include_test || !crate::languages::is_test_path(&item.path));
+    diagnostics.retain(|item| {
+        Config::current().include_test || !crate::languages::is_test_path(&item.path)
+    });
     let changes = changes(&pair.base, &pair.target);
     Ok(CaptureResult {
         pair,
@@ -718,6 +660,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn fixture() -> (TempDir, Repository) {
+        Config::init(Config { include_test: true }).unwrap();
         let dir = TempDir::new().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
         (dir, repo)
@@ -749,7 +692,7 @@ mod tests {
         })
     }
     fn capture(mode: &Comparison, dir: &TempDir) -> CaptureResult {
-        capture_comparison(mode, dir.path().to_path_buf(), true).unwrap()
+        capture_comparison(mode, dir.path().to_path_buf()).unwrap()
     }
     fn body<'a>(snapshot: &'a CapturedSnapshot, path: &[u8]) -> Option<&'a [u8]> {
         snapshot.files.get(path).map(|f| f.bytes.as_slice())
@@ -868,7 +811,7 @@ mod tests {
             target: "also-missing".into(),
         };
         assert_eq!(
-            capture_comparison(&mode, dir.path().to_path_buf(), true)
+            capture_comparison(&mode, dir.path().to_path_buf())
                 .unwrap_err()
                 .exit_code(),
             2
@@ -876,7 +819,7 @@ mod tests {
         let bare = TempDir::new().unwrap();
         Repository::init_bare(bare.path()).unwrap();
         assert_eq!(
-            capture_comparison(&local(false, false), bare.path().to_path_buf(), true)
+            capture_comparison(&local(false, false), bare.path().to_path_buf())
                 .unwrap_err()
                 .exit_code(),
             2
@@ -897,7 +840,7 @@ mod tests {
         index.add(&theirs).unwrap();
         index.write().unwrap();
         assert_eq!(
-            capture_comparison(&local(false, false), dir.path().to_path_buf(), true)
+            capture_comparison(&local(false, false), dir.path().to_path_buf())
                 .unwrap_err()
                 .exit_code(),
             2
@@ -912,12 +855,8 @@ mod tests {
         commit(&repo, "pkg/a.py");
         fs::remove_file(dir.path().join("pkg/a.py")).unwrap();
         fs::remove_dir(dir.path().join("pkg")).unwrap();
-        let result = capture_comparison(
-            &local(false, false),
-            dir.path().join(".git").join(".."),
-            true,
-        )
-        .unwrap();
+        let result =
+            capture_comparison(&local(false, false), dir.path().join(".git").join("..")).unwrap();
         assert_eq!(result.changes.len(), 1);
         assert_eq!(result.changes[0].kind, ChangeKind::Deleted);
         assert_eq!(body(&result.pair.base, b"pkg/a.py"), Some(&b"old"[..]));
@@ -944,7 +883,7 @@ mod tests {
             target: "origin/base".into(),
         };
         assert_eq!(
-            capture_comparison(&bad, dir.path().to_path_buf(), true)
+            capture_comparison(&bad, dir.path().to_path_buf())
                 .unwrap_err()
                 .exit_code(),
             2
@@ -1082,7 +1021,7 @@ mod tests {
         let linked = TempDir::new().unwrap();
         let path = linked.path().join("linked");
         repo.worktree("linked", &path, None).unwrap();
-        let result = capture_comparison(&local(false, false), path, true).unwrap();
+        let result = capture_comparison(&local(false, false), path).unwrap();
         assert_eq!(body(&result.pair.base, b"a.py"), Some(&b"base"[..]));
         assert_eq!(body(&result.pair.target, b"a.py"), Some(&b"base"[..]));
     }

@@ -2,11 +2,16 @@ mod cli;
 
 use clap::Parser;
 use cli::{Cli, CompareMode, OutputFormat, OutputTarget, RenderTarget};
-use dflow_core::{diagram, git, report};
+use dflow_core::{config::Config, diagram, git, report};
 use std::io::IsTerminal;
 
 fn main() {
     let cli = Cli::parse();
+    Config::init(Config {
+        include_test: cli.include_test,
+    })
+    .expect("configuration must be initialized only once per process");
+
     let options = match &cli.mode {
         CompareMode::Local(local) => &local.options,
         CompareMode::Branch(branch) => &branch.options,
@@ -39,9 +44,9 @@ fn main() {
 
     let comparison = cli.mode.comparison();
 
-    match git::capture_comparison(&comparison, discovery_dir.clone(), cli.include_test) {
+    match git::capture_comparison(&comparison, discovery_dir.clone()) {
         Ok(capture) => {
-            let session = report::AnalysisSession::new(capture, cli.include_test);
+            let session = report::AnalysisSession::new(capture);
             match format {
                 OutputTarget::Render(RenderTarget::Tui) => {
                     #[cfg(feature = "tui")]
@@ -51,7 +56,6 @@ fn main() {
                             &comparison,
                             options.depth as usize,
                             discovery_dir,
-                            cli.include_test,
                         ) {
                             Ok(complete) => complete,
                             Err(error) => {

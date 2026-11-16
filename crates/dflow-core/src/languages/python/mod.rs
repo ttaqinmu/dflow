@@ -103,7 +103,6 @@ struct Walker<'a> {
     bytes: &'a [u8],
     path: Vec<u8>,
     role: SnapshotRole,
-    include_test: bool,
     parsed: ParsedFile,
     order: usize,
     instances: Vec<(usize, String, String, usize)>,
@@ -146,7 +145,7 @@ impl Walker<'_> {
         node.children(&mut cursor).collect()
     }
     fn is_excluded_definition(&self, node: Node<'_>) -> bool {
-        if self.include_test {
+        if crate::config::Config::current().include_test {
             return false;
         }
         let inner = if node.kind() == "decorated_definition" {
@@ -743,7 +742,8 @@ impl LanguageAdapter for PythonAdapter {
     fn accepts_metadata(&self, path: &[u8]) -> bool {
         path == b"pyproject.toml" || path.ends_with(b"/pyproject.toml")
     }
-    fn discover(&self, snapshot: &CapturedSnapshot, include_test: bool) -> Discovery {
+    fn discover(&self, snapshot: &CapturedSnapshot) -> Discovery {
+        let include_test = crate::config::Config::current().include_test;
         let mut discovery = Discovery::default();
         let mut prefixes = vec![Vec::new(), b"src/".to_vec()];
         for path in snapshot.files.keys() {
@@ -791,8 +791,8 @@ impl LanguageAdapter for PythonAdapter {
         file: &CapturedFile,
         role: SnapshotRole,
         unit: &DiscoveredUnit,
-        include_test: bool,
     ) -> ParsedFile {
+        let include_test = crate::config::Config::current().include_test;
         let mut parsed = ParsedFile {
             unit: unit.key.clone(),
             path: file.path.clone(),
@@ -882,7 +882,6 @@ impl LanguageAdapter for PythonAdapter {
             bytes,
             path: file.path.clone(),
             role,
-            include_test,
             parsed,
             order: 0,
             instances: Vec::new(),

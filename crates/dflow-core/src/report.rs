@@ -32,29 +32,35 @@ pub struct AnalysisSession {
     pub target_graph: SnapshotGraph,
     pub edge_comparison: graph::EdgeComparison,
 }
+
 impl AnalysisSession {
-    pub fn new(capture: CaptureResult, include_test: bool) -> Self {
-        let base = analysis::extract_snapshot(&capture.pair.base, include_test);
-        let target = analysis::extract_snapshot(&capture.pair.target, include_test);
+    pub fn new(capture: CaptureResult) -> Self {
+        let base = analysis::extract_snapshot(&capture.pair.base);
+        let target = analysis::extract_snapshot(&capture.pair.target);
         let mut changes = analysis::classify_symbols(&base, &target);
         let base_graph = graph::build(&base);
         let target_graph = graph::build(&target);
         let edge_comparison = graph::compare_edges(&base_graph, &target_graph, &base, &target);
+
         changes.changes.retain(|change| {
             let (Some(before), Some(after)) = (&change.before, &change.after) else {
                 return true;
             };
+
             if change.kind != SymbolChangeKind::Modified
                 || before.direct_fingerprint == after.direct_fingerprint
                 || before.non_call_fingerprint != after.non_call_fingerprint
             {
                 return true;
             }
+
             let before_id = base_graph.symbol_ids.get(&(before.unit.clone(), before.scope_id));
             let after_id = target_graph.symbol_ids.get(&(after.unit.clone(), after.scope_id));
+
             !matches!((before_id, after_id), (Some(b), Some(a))
                 if graph::call_retargets_covered(&base_graph, &target_graph, b, a, &edge_comparison))
         });
+
         Self {
             capture,
             base,
@@ -65,12 +71,15 @@ impl AnalysisSession {
             edge_comparison,
         }
     }
+
     pub fn complete(&self) -> bool {
         self.changes.complete && self.capture.diagnostics.is_empty()
     }
+
     pub fn focused_graph(&self, depth: usize) -> FocusedGraph {
         let native_to_view = &self.edge_comparison.native_to_view;
         let mut nodes: BTreeMap<String, FocusedNode> = BTreeMap::new();
+
         for graph in [&self.base_graph, &self.target_graph] {
             for id in graph.ids.keys() {
                 let entry = nodes.entry(native_to_view[id].clone()).or_default();
@@ -80,37 +89,45 @@ impl AnalysisSession {
                 }
             }
         }
+
         let mut distances: BTreeMap<String, usize> = BTreeMap::new();
         let mut changed_roots = Vec::new();
         let mut edges: BTreeMap<(String, String), Vec<EdgeContributor>> = BTreeMap::new();
         let mut edge_status = BTreeMap::new();
+
         for change in &self.changes.changes {
             let (role, symbol) = if change.kind == SymbolChangeKind::Deleted {
                 (SnapshotRole::Base, change.before.as_ref())
             } else {
                 (SnapshotRole::Target, change.after.as_ref())
             };
+
             let Some(symbol) = symbol else { continue };
             let graph = match role {
                 SnapshotRole::Base => &self.base_graph,
                 SnapshotRole::Target => &self.target_graph,
             };
+
             let Some(root) = graph
                 .symbol_ids
                 .get(&(symbol.unit.clone(), symbol.scope_id))
             else {
                 continue;
             };
+
             let view_root = native_to_view[root].clone();
+            let impact = graph::callers(graph, root, depth);
+
             nodes.get_mut(&view_root).unwrap().changes.push(change.kind);
             changed_roots.push(view_root);
-            let impact = graph::callers(graph, root, depth);
+
             for (native, distance) in impact.nodes {
                 distances
                     .entry(native_to_view[&native].clone())
                     .and_modify(|old| *old = (*old).min(distance))
                     .or_insert(distance);
             }
+
             for (caller, callee) in impact.edges {
                 edges
                     .entry((
@@ -121,6 +138,7 @@ impl AnalysisSession {
                     .push((role, caller, callee));
             }
         }
+
         for change in &self.edge_comparison.changes {
             let (role, caller, callee) = if let Some((caller, callee)) = &change.before {
                 (SnapshotRole::Base, caller, callee)
@@ -129,10 +147,12 @@ impl AnalysisSession {
             } else {
                 continue;
             };
+
             let graph = match role {
                 SnapshotRole::Base => &self.base_graph,
                 SnapshotRole::Target => &self.target_graph,
             };
+
             let impact = graph::callers(graph, callee, depth);
             for (native, distance) in impact.nodes {
                 distances
@@ -140,25 +160,30 @@ impl AnalysisSession {
                     .and_modify(|old| *old = (*old).min(distance))
                     .or_insert(distance);
             }
+
             for (from, to) in impact.edges {
                 edges
                     .entry((native_to_view[&from].clone(), native_to_view[&to].clone()))
                     .or_default()
                     .push((role, from, to));
             }
+
             distances.entry(change.caller_view.clone()).or_insert(1);
             distances.entry(change.callee_view.clone()).or_insert(0);
             edges
                 .entry((change.caller_view.clone(), change.callee_view.clone()))
                 .or_default()
                 .push((role, caller.clone(), callee.clone()));
+
             edge_status.insert(
                 (change.caller_view.clone(), change.callee_view.clone()),
                 change.kind,
             );
         }
+
         changed_roots.sort();
         changed_roots.dedup();
+
         for node in nodes.values_mut() {
             node.changes.sort_by_key(|kind| match kind {
                 SymbolChangeKind::Added => 0,
@@ -167,15 +192,18 @@ impl AnalysisSession {
             });
             node.changes.dedup();
         }
+
         for contributors in edges.values_mut() {
             contributors.sort();
             contributors.dedup();
         }
+
         let impact = graph::Impact {
             root: changed_roots.first().cloned().unwrap_or_default(),
             nodes: distances.into_iter().collect(),
             edges: edges.keys().cloned().collect(),
         };
+
         FocusedGraph {
             nodes,
             edges,
@@ -184,6 +212,7 @@ impl AnalysisSession {
             impact,
         }
     }
+
     pub fn report(&self, mode: &Comparison, depth: usize) -> Value {
         let comparison = match mode {
             Comparison::Local(selection) => {
@@ -211,31 +240,37 @@ impl AnalysisSession {
                     .collect::<Vec<_>>()
             })
             .collect();
+
         let symbols: Vec<_> = [&self.base_graph, &self.target_graph].into_iter().flat_map(|g| g.graph.node_weights().filter_map(|n| n.symbol.as_ref().map(|s| json!({"id":n.id,"language":snake(&format!("{:?}",s.language)),"name":s.name,"qualified_name":s.qualified_name,"kind":snake(&format!("{:?}",s.kind)),"snapshot":role(s.source.snapshot),"path":path(&s.source.path),"range":range(s.source.range),"fingerprint":s.fingerprint}))).collect::<Vec<_>>()).collect();
         let mut symbol_changes = Vec::new();
         let mut impacts = Vec::new();
+
         for change in &self.changes.changes {
             let before = change.before.as_ref().and_then(|s| {
                 self.base_graph
                     .symbol_ids
                     .get(&(s.unit.clone(), s.scope_id))
             });
+
             let after = change.after.as_ref().and_then(|s| {
                 self.target_graph
                     .symbol_ids
                     .get(&(s.unit.clone(), s.scope_id))
             });
+
             let kind = match change.kind {
                 SymbolChangeKind::Added => "added",
                 SymbolChangeKind::Modified => "modified",
                 SymbolChangeKind::Deleted => "deleted",
             };
+
             symbol_changes.push(json!({"kind":kind,"before":before,"after":after}));
             let (graph, root) = if change.kind == SymbolChangeKind::Deleted {
                 (&self.base_graph, before)
             } else {
                 (&self.target_graph, after)
             };
+
             if let Some(root) = root {
                 let impact = graph::callers(graph, root, depth);
                 impacts.push(json!({"root":impact.root,"snapshot":role(graph.role),"nodes":impact.nodes.iter().map(|(id,d)|json!({"id":id,"depth":d})).collect::<Vec<_>>(),"edges":impact.edges.iter().map(|(from,to)|json!({"caller":from,"callee":to})).collect::<Vec<_>>()}));
@@ -244,23 +279,27 @@ impl AnalysisSession {
         let call_sites: Vec<_> = [&self.base_graph,&self.target_graph].into_iter().flat_map(|g| g.calls.iter().map(|c|json!({"id":c.id,"caller":c.caller,"target":c.target,"unresolved_reason":c.reason.map(|r|snake(&format!("{:?}",r))),"expression":c.expression,"snapshot":role(c.source.snapshot),"path":path(&c.source.path),"range":range(c.source.range)})).collect::<Vec<_>>()).collect();
         let mut edges: Vec<_> = [&self.base_graph,&self.target_graph].into_iter().flat_map(|g|g.graph.edge_references().map(|e|json!({"caller":g.graph[e.source()].id,"callee":g.graph[e.target()].id,"snapshot":role(g.role),"call_sites":e.weight()})).collect::<Vec<_>>()).collect();
         edges.sort_by_key(|edge| serde_json::to_string(edge).unwrap_or_default());
+
         let edge_changes: Vec<_> = self.edge_comparison.changes.iter().map(|change| {
             let pair = |ids: &Option<(String, String)>| ids.as_ref()
                 .map(|(caller, callee)| json!({"caller":caller,"callee":callee}));
             json!({"kind":match change.kind { graph::EdgeChangeKind::Added => "added", graph::EdgeChangeKind::Deleted => "deleted" },
                 "before":pair(&change.before),"after":pair(&change.after)})
         }).collect();
+
         let mut diagnostics: Vec<Value> = self.capture.diagnostics.iter().map(|d|json!({"category":"git","message":d.message,"path":path(&d.path),"snapshot":null,"range":null,"affects_completeness":true})).collect();
         diagnostics.extend(self.base.diagnostics.iter().chain(&self.target.diagnostics).map(|d| {
             let rust_layout = matches!(d.kind, analysis::DiagnosticKind::UnsupportedLayout | analysis::DiagnosticKind::ModuleAmbiguity)
                 && (d.path.ends_with(b".rs") || d.path.ends_with(b"Cargo.toml"));
             json!({"category":snake(&format!("{:?}",d.kind)),"message":d.message,"path":path(&d.path),"snapshot":role(d.snapshot),"range":d.range.map(range),"affects_completeness":matches!(d.kind,analysis::DiagnosticKind::ParseError|analysis::DiagnosticKind::InvalidEncoding) || rust_layout})
         }));
+
         diagnostics.extend(self.changes.diagnostics.iter().map(|d| json!({"category":snake(&format!("{:?}",d.kind)),"message":d.message,"path":path(&d.path),"snapshot":role(d.snapshot),"range":d.range.map(range),"affects_completeness":false})));
         diagnostics.sort_by_key(|d| serde_json::to_string(d).unwrap_or_default());
         json!({"schema_version":2,"tool_version":env!("CARGO_PKG_VERSION"),"comparison":comparison,"snapshots":{"base":snapshot(&self.capture.pair.base),"target":snapshot(&self.capture.pair.target)},"file_changes":file_changes,"symbols":symbols,"module_contexts":module_contexts,"symbol_changes":symbol_changes,"edge_changes":edge_changes,"call_sites":call_sites,"edges":edges,"impacts":impacts,"diagnostics":diagnostics,"complete":self.complete()})
     }
 }
+
 fn snake(input: &str) -> String {
     let mut result = String::new();
     for (i, ch) in input.chars().enumerate() {
@@ -275,21 +314,25 @@ fn snake(input: &str) -> String {
     }
     result
 }
+
 fn path(bytes: &[u8]) -> Value {
     match std::str::from_utf8(bytes) {
         Ok(text) => json!({"text":text}),
         Err(_) => json!({"hex":bytes.iter().map(|b|format!("{b:02x}")).collect::<String>()}),
     }
 }
+
 fn role(role: SnapshotRole) -> &'static str {
     match role {
         SnapshotRole::Base => "base",
         SnapshotRole::Target => "target",
     }
 }
+
 fn range(r: SourceRange) -> Value {
     json!({"start":{"line":r.start.line,"byte_column":r.start.byte_column,"byte_offset":r.start_byte},"end":{"line":r.end.line,"byte_column":r.end.byte_column,"byte_offset":r.end_byte}})
 }
+
 fn snapshot(s: &CapturedSnapshot) -> Value {
     json!({"kind":match s.kind { SnapshotKind::Commit=>"commit",SnapshotKind::Index=>"index",SnapshotKind::WorkingTree=>"working_tree",SnapshotKind::Empty=>"empty"},"role":role(s.role),"commit_id":s.commit_id.map(|o|o.to_string()),"branch":s.branch,"content_id":s.content_id})
 }
@@ -324,17 +367,15 @@ mod tests {
         }
     }
     fn session(base: &[(&[u8], &[u8])], target: &[(&[u8], &[u8])]) -> AnalysisSession {
-        AnalysisSession::new(
-            CaptureResult {
-                pair: SnapshotPair {
-                    base: snapshot(SnapshotRole::Base, base),
-                    target: snapshot(SnapshotRole::Target, target),
-                },
-                changes: Vec::<FileChange>::new(),
-                diagnostics: vec![],
+        crate::config::Config::init(crate::config::Config { include_test: true }).unwrap();
+        AnalysisSession::new(CaptureResult {
+            pair: SnapshotPair {
+                base: snapshot(SnapshotRole::Base, base),
+                target: snapshot(SnapshotRole::Target, target),
             },
-            true,
-        )
+            changes: Vec::<FileChange>::new(),
+            diagnostics: vec![],
+        })
     }
     fn mode() -> Comparison {
         Comparison::Local(LocalSelection::Combined)

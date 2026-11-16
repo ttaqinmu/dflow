@@ -28,6 +28,34 @@ fn run_from(dir: &Path, args: &[&str]) -> (std::process::Output, Value) {
 fn run(dir: &TempDir, args: &[&str]) -> (std::process::Output, Value) {
     run_from(dir.path(), args)
 }
+
+#[test]
+fn include_test_flag_controls_test_source_capture() {
+    let dir = TempDir::new().unwrap();
+    Repository::init(dir.path()).unwrap();
+    fs::write(
+        dir.path().join("test_sample.py"),
+        "def test_sample(): pass\n",
+    )
+    .unwrap();
+
+    let (excluded, excluded_report) = run(&dir, &["local"]);
+    assert!(excluded.status.success());
+    assert!(
+        excluded_report["file_changes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let (included, included_report) = run(&dir, &["--include-test", "local"]);
+    assert!(included.status.success());
+    assert_eq!(included_report["file_changes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        included_report["symbol_changes"].as_array().unwrap().len(),
+        1
+    );
+}
 #[test]
 fn all_local_selections_emit_json_without_mutating_index() {
     let dir = TempDir::new().unwrap();

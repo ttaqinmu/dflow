@@ -195,6 +195,7 @@ mod tests {
     use crate::git::{CaptureResult, CapturedFile, CapturedSnapshot, SnapshotKind, SnapshotPair};
 
     fn session(base: &[(&[u8], &[u8])], target: &[(&[u8], &[u8])]) -> AnalysisSession {
+        crate::config::Config::init(crate::config::Config { include_test: true }).unwrap();
         let snapshot = |role, inputs: &[(&[u8], &[u8])]| CapturedSnapshot {
             kind: SnapshotKind::WorkingTree,
             role,
@@ -215,17 +216,14 @@ mod tests {
                 .collect(),
             content_id: String::new(),
         };
-        AnalysisSession::new(
-            CaptureResult {
-                pair: SnapshotPair {
-                    base: snapshot(SnapshotRole::Base, base),
-                    target: snapshot(SnapshotRole::Target, target),
-                },
-                changes: vec![],
-                diagnostics: vec![],
+        AnalysisSession::new(CaptureResult {
+            pair: SnapshotPair {
+                base: snapshot(SnapshotRole::Base, base),
+                target: snapshot(SnapshotRole::Target, target),
             },
-            true,
-        )
+            changes: vec![],
+            diagnostics: vec![],
+        })
     }
 
     #[test]

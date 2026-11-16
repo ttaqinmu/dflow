@@ -61,7 +61,6 @@ type ModuleSources = BTreeMap<(String, String), (Vec<u8>, Option<(usize, usize)>
 
 struct Finder<'a> {
     snapshot: &'a CapturedSnapshot,
-    include_test: bool,
     excluded_paths: BTreeSet<Vec<u8>>,
     excluded_dirs: BTreeSet<Vec<u8>>,
     result: Discovery,
@@ -106,7 +105,7 @@ impl Finder<'_> {
     }
 
     fn excluded(&self, path: &[u8]) -> bool {
-        !self.include_test
+        !crate::config::Config::current().include_test
             && (is_test_path(path)
                 || self.excluded_paths.contains(path)
                 || self
@@ -284,7 +283,7 @@ impl Finder<'_> {
                 ));
             }
         }
-        if self.include_test {
+        if crate::config::Config::current().include_test {
             if let Some(declarations) = value.get("test") {
                 if let Some(declarations) = declarations.as_array() {
                     for declaration in declarations {
@@ -495,7 +494,7 @@ impl Finder<'_> {
             return;
         };
         let root = tree.root_node();
-        if self.include_test && root.has_error() {
+        if crate::config::Config::current().include_test && root.has_error() {
             self.issue(
                 DiagnosticKind::ParseError,
                 &path,
@@ -555,7 +554,7 @@ impl Finder<'_> {
                     continue;
                 }
                 "mod_item" => {
-                    if !self.include_test
+                    if !crate::config::Config::current().include_test
                         && pending
                             .iter()
                             .any(|attr| is_cfg_test_attribute(*attr, bytes))
@@ -829,7 +828,7 @@ fn literal_path(value: &[u8]) -> Option<String> {
     Some(raw.to_owned())
 }
 
-pub(super) fn discover(snapshot: &CapturedSnapshot, include_test: bool) -> Discovery {
+pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
     if !snapshot
         .files
         .keys()
@@ -840,7 +839,6 @@ pub(super) fn discover(snapshot: &CapturedSnapshot, include_test: bool) -> Disco
     let mut finder = Finder {
         snapshot,
         result: Discovery::default(),
-        include_test,
         excluded_paths: BTreeSet::new(),
         excluded_dirs: BTreeSet::new(),
         visited: BTreeSet::new(),
@@ -926,6 +924,7 @@ mod tests {
     use crate::git::{CapturedFile, SnapshotKind, SnapshotRole};
 
     fn captured(files: &[(&str, &str)]) -> CapturedSnapshot {
+        crate::config::Config::init(crate::config::Config { include_test: true }).unwrap();
         CapturedSnapshot {
             kind: SnapshotKind::WorkingTree,
             role: SnapshotRole::Target,
@@ -964,7 +963,7 @@ mod tests {
             ("member/src/hidden/child.rs", "pub fn leaf() {}\n"),
             ("member/src/other.rs", "pub fn other() {}\n"),
         ]);
-        let result = discover(&snapshot, true);
+        let result = discover(&snapshot);
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         assert!(!result.incomplete);
         assert_eq!(result.units.len(), 8);
@@ -1012,7 +1011,7 @@ mod tests {
             ("src/both/mod.rs", ""),
             ("src/loose.rs", ""),
         ]);
-        let result = discover(&snapshot, true);
+        let result = discover(&snapshot);
         assert!(result.incomplete);
         assert!(
             result
@@ -1046,7 +1045,7 @@ mod tests {
             ("Cargo.toml", "[workspace]\nmembers = [\"member*\"]\n"),
             ("src/lib.rs", "pub fn unrelated() {}"),
         ]);
-        assert!(discover(&bad, true).incomplete);
+        assert!(discover(&bad).incomplete);
         let bad = captured(&[
             (
                 "Cargo.toml",
@@ -1055,7 +1054,7 @@ mod tests {
             ("src/lib.rs", "pub fn unrelated() {}"),
         ]);
         assert!(
-            discover(&bad, true)
+            discover(&bad)
                 .diagnostics
                 .iter()
                 .any(|d| d.message.contains("concrete string"))
@@ -1068,14 +1067,14 @@ mod tests {
             ("src/lib.rs", "pub fn unrelated() {}"),
         ]);
         assert!(
-            discover(&bad, true)
+            discover(&bad)
                 .diagnostics
                 .iter()
                 .any(|d| d.message.contains("escapes repository"))
         );
         let bad = captured(&[("Cargo.toml", "[package\nname = \"x\""), ("src/lib.rs", "")]);
         assert!(
-            discover(&bad, true)
+            discover(&bad)
                 .diagnostics
                 .iter()
                 .any(|d| d.message.contains("invalid Cargo manifest"))

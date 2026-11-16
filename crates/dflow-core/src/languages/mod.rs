@@ -8,14 +8,9 @@ pub trait LanguageAdapter {
     fn accepts_metadata(&self, _path: &[u8]) -> bool {
         false
     }
-    fn discover(&self, snapshot: &CapturedSnapshot, include_test: bool) -> Discovery;
-    fn extract(
-        &self,
-        file: &CapturedFile,
-        role: SnapshotRole,
-        unit: &DiscoveredUnit,
-        include_test: bool,
-    ) -> ParsedFile;
+    fn discover(&self, snapshot: &CapturedSnapshot) -> Discovery;
+    fn extract(&self, file: &CapturedFile, role: SnapshotRole, unit: &DiscoveredUnit)
+    -> ParsedFile;
 }
 pub(crate) fn adapters() -> Vec<Box<dyn LanguageAdapter>> {
     vec![Box::new(python::PythonAdapter), Box::new(rust::RustAdapter)]

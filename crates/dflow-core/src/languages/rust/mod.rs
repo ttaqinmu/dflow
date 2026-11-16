@@ -30,7 +30,6 @@ struct Walker<'a> {
     bytes: &'a [u8],
     role: SnapshotRole,
     parsed: ParsedFile,
-    include_test: bool,
     order: usize,
 }
 impl Walker<'_> {
@@ -441,7 +440,7 @@ impl Walker<'_> {
         scope: usize,
         inherited: Availability,
     ) {
-        if !self.include_test
+        if !crate::config::Config::current().include_test
             && attrs
                 .iter()
                 .any(|attr| discover::is_test_definition_attribute(*attr, self.bytes))
@@ -581,7 +580,7 @@ impl Walker<'_> {
                 attrs.push(child);
                 continue;
             }
-            if !self.include_test
+            if !crate::config::Config::current().include_test
                 && attrs
                     .iter()
                     .any(|attr| discover::is_test_definition_attribute(*attr, self.bytes))
@@ -604,16 +603,16 @@ impl LanguageAdapter for RustAdapter {
     fn accepts_metadata(&self, path: &[u8]) -> bool {
         path == b"Cargo.toml" || path.ends_with(b"/Cargo.toml")
     }
-    fn discover(&self, snapshot: &CapturedSnapshot, include_test: bool) -> Discovery {
-        discover::discover(snapshot, include_test)
+    fn discover(&self, snapshot: &CapturedSnapshot) -> Discovery {
+        discover::discover(snapshot)
     }
     fn extract(
         &self,
         file: &CapturedFile,
         role: SnapshotRole,
         unit: &DiscoveredUnit,
-        include_test: bool,
     ) -> ParsedFile {
+        let include_test = crate::config::Config::current().include_test;
         let mut parsed = ParsedFile {
             path: file.path.clone(),
             unit: unit.key.clone(),
@@ -730,7 +729,6 @@ impl LanguageAdapter for RustAdapter {
             role,
             parsed,
             order: 0,
-            include_test,
         };
         walker.errors(selected);
         if include_test && selected.has_error() && walker.parsed.diagnostics.is_empty() {
@@ -767,6 +765,7 @@ mod tests {
         target: &str,
         subtree: Option<(usize, usize)>,
     ) -> ParsedFile {
+        crate::config::Config::init(crate::config::Config { include_test: true }).unwrap();
         let file = CapturedFile {
             path: b"src/lib.rs".to_vec(),
             bytes: source.as_bytes().to_vec(),
@@ -783,7 +782,7 @@ mod tests {
             conditional: false,
             unknown_attribute: false,
         };
-        RustAdapter.extract(&file, SnapshotRole::Target, &unit, true)
+        RustAdapter.extract(&file, SnapshotRole::Target, &unit)
     }
     fn extract(source: &str, subtree: Option<(usize, usize)>) -> ParsedFile {
         extract_unit(source, "crate", "Cargo.toml:lib:demo", subtree)

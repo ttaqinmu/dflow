@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod comparison;
+pub mod config;
 pub mod diagram;
 pub mod git;
 pub mod graph;

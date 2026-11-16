@@ -76,7 +76,6 @@ pub fn run(
     mode: &Comparison,
     depth: usize,
     discovery_dir: PathBuf,
-    include_test: bool,
 ) -> io::Result<bool> {
     let mut app = state::App::new(session, mode, depth);
     let mut watch = watch::ReloadWatch::new(mode, &discovery_dir);
@@ -136,10 +135,10 @@ pub fn run(
                 }
             }
             if watch.should_capture(Instant::now()) {
-                match git::capture_comparison(mode, discovery_dir.clone(), include_test) {
+                match git::capture_comparison(mode, discovery_dir.clone()) {
                     Ok(capture) => {
                         if !same_capture(&capture, &app.session.capture) {
-                            app.replace_session(AnalysisSession::new(capture, include_test));
+                            app.replace_session(AnalysisSession::new(capture));
                             redraw = true;
                         } else if app.reload_error.take().is_some() {
                             redraw = true;
@@ -201,17 +200,16 @@ mod tests {
         }
     }
     fn session(base: &[(&[u8], &[u8])], target: &[(&[u8], &[u8])]) -> AnalysisSession {
-        AnalysisSession::new(
-            CaptureResult {
-                pair: SnapshotPair {
-                    base: snapshot(SnapshotRole::Base, base),
-                    target: snapshot(SnapshotRole::Target, target),
-                },
-                changes: vec![],
-                diagnostics: vec![],
+        dflow_core::config::Config::init(dflow_core::config::Config { include_test: true })
+            .unwrap();
+        AnalysisSession::new(CaptureResult {
+            pair: SnapshotPair {
+                base: snapshot(SnapshotRole::Base, base),
+                target: snapshot(SnapshotRole::Target, target),
             },
-            true,
-        )
+            changes: vec![],
+            diagnostics: vec![],
+        })
     }
     fn mode() -> Comparison {
         Comparison::Local(LocalSelection::Combined)

@@ -575,17 +575,16 @@ mod tests {
         }
     }
     fn session(base: &[u8], target: &[u8]) -> AnalysisSession {
-        AnalysisSession::new(
-            CaptureResult {
-                pair: SnapshotPair {
-                    base: snapshot(SnapshotRole::Base, base),
-                    target: snapshot(SnapshotRole::Target, target),
-                },
-                changes: vec![],
-                diagnostics: vec![],
+        dflow_core::config::Config::init(dflow_core::config::Config { include_test: true })
+            .unwrap();
+        AnalysisSession::new(CaptureResult {
+            pair: SnapshotPair {
+                base: snapshot(SnapshotRole::Base, base),
+                target: snapshot(SnapshotRole::Target, target),
             },
-            true,
-        )
+            changes: vec![],
+            diagnostics: vec![],
+        })
     }
     #[test]
     fn retargeted_calls_keep_direction_status_and_captured_provenance() {

@@ -7,12 +7,14 @@ pub enum LanguageId {
     Python,
     Rust,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceUnitKey {
     pub path: Vec<u8>,
     pub target: String,
     pub module: String,
 }
+
 impl SourceUnitKey {
     pub fn python(path: &[u8]) -> Self {
         Self {
@@ -22,6 +24,7 @@ impl SourceUnitKey {
         }
     }
 }
+
 #[derive(Debug, Clone)]
 pub struct DiscoveredUnit {
     pub key: SourceUnitKey,
@@ -30,12 +33,14 @@ pub struct DiscoveredUnit {
     pub conditional: bool,
     pub unknown_attribute: bool,
 }
+
 #[derive(Debug, Default)]
 pub struct Discovery {
     pub units: Vec<DiscoveredUnit>,
     pub diagnostics: Vec<Diagnostic>,
     pub incomplete: bool,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     Function,
@@ -43,11 +48,13 @@ pub enum SymbolKind {
     Method,
     AsyncMethod,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
     pub line: usize,
     pub byte_column: usize,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceRange {
     pub start: Position,
@@ -55,12 +62,14 @@ pub struct SourceRange {
     pub start_byte: usize,
     pub end_byte: usize,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRef {
     pub snapshot: SnapshotRole,
     pub path: Vec<u8>,
     pub range: SourceRange,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeKind {
     Module,
@@ -70,6 +79,7 @@ pub enum ScopeKind {
     RustType,
     RustTrait,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
     pub id: usize,
@@ -79,6 +89,7 @@ pub struct Scope {
     pub kind: ScopeKind,
     pub source: SourceRef,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Symbol {
     pub unit: SourceUnitKey,
@@ -97,6 +108,7 @@ pub struct Symbol {
     pub conditional: bool,
     pub unknown_attribute: bool,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindingKind {
     Parameter,
@@ -106,6 +118,7 @@ pub enum BindingKind {
     Nonlocal,
     Definition,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Binding {
     pub scope_id: usize,
@@ -116,6 +129,7 @@ pub struct Binding {
     pub conditional: bool,
     pub unknown_attribute: bool,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportBinding {
     pub scope_id: usize,
@@ -128,6 +142,7 @@ pub struct ImportBinding {
     pub unknown_attribute: bool,
     pub source: SourceRef,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedCallSite {
     pub scope_id: usize,
@@ -135,6 +150,7 @@ pub struct ExtractedCallSite {
     pub target: CallTarget,
     pub source: SourceRef,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallTarget {
     Name(String),
@@ -143,6 +159,7 @@ pub enum CallTarget {
     TypedMethod { constructor: String, name: String },
     Dynamic,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticKind {
     InvalidEncoding,
@@ -151,6 +168,7 @@ pub enum DiagnosticKind {
     UnsupportedLayout,
     DuplicateSymbol,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub kind: DiagnosticKind,
@@ -159,6 +177,7 @@ pub struct Diagnostic {
     pub path: Vec<u8>,
     pub range: Option<SourceRange>,
 }
+
 #[derive(Debug, Clone)]
 pub struct ParsedFile {
     pub unit: SourceUnitKey,
@@ -173,6 +192,7 @@ pub struct ParsedFile {
     pub calls: Vec<ExtractedCallSite>,
     pub diagnostics: Vec<Diagnostic>,
 }
+
 #[derive(Debug)]
 pub struct ExtractedSnapshot {
     pub role: SnapshotRole,
@@ -180,18 +200,21 @@ pub struct ExtractedSnapshot {
     pub diagnostics: Vec<Diagnostic>,
     pub complete: bool,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolChangeKind {
     Added,
     Modified,
     Deleted,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolChange {
     pub kind: SymbolChangeKind,
     pub before: Option<Symbol>,
     pub after: Option<Symbol>,
 }
+
 #[derive(Debug)]
 pub struct ChangeAnalysis {
     pub changes: Vec<SymbolChange>,
@@ -216,12 +239,13 @@ impl FingerprintBuilder {
     }
 }
 
-pub fn extract_snapshot(snapshot: &CapturedSnapshot, include_test: bool) -> ExtractedSnapshot {
+pub fn extract_snapshot(snapshot: &CapturedSnapshot) -> ExtractedSnapshot {
+    let include_test = crate::config::Config::current().include_test;
     let mut files = BTreeMap::new();
     let mut diagnostics = Vec::new();
     let mut complete = true;
     for adapter in crate::languages::adapters() {
-        let discovery = adapter.discover(snapshot, include_test);
+        let discovery = adapter.discover(snapshot);
         complete &= !discovery.incomplete;
         diagnostics.extend(discovery.diagnostics);
         let mut covered = BTreeSet::new();
@@ -231,7 +255,7 @@ pub fn extract_snapshot(snapshot: &CapturedSnapshot, include_test: bool) -> Extr
                 continue;
             };
             covered.insert(unit.key.path.clone());
-            let parsed = adapter.extract(file, snapshot.role, &unit, include_test);
+            let parsed = adapter.extract(file, snapshot.role, &unit);
             complete &= parsed.valid;
             diagnostics.extend(parsed.diagnostics.clone());
             files.insert(unit.key, parsed);
@@ -394,6 +418,7 @@ mod tests {
     use super::*;
     use crate::git::{CapturedFile, SnapshotKind};
     fn snapshot(role: SnapshotRole, files: &[(&[u8], &[u8])]) -> CapturedSnapshot {
+        crate::config::Config::init(crate::config::Config { include_test: true }).unwrap();
         let files = files
             .iter()
             .map(|(path, bytes)| {
@@ -427,7 +452,7 @@ mod tests {
                 (b"pkg/tools.py", b""),
             ],
         );
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         let file = result
             .files
             .get(&SourceUnitKey::python(b"pkg/module.py"))
@@ -472,10 +497,7 @@ mod tests {
             SnapshotRole::Target,
             &[(b"a.py", b"def f( ):\n\n    return 1 # other\n")],
         );
-        let changes = classify_symbols(
-            &extract_snapshot(&before, true),
-            &extract_snapshot(&after, true),
-        );
+        let changes = classify_symbols(&extract_snapshot(&before), &extract_snapshot(&after));
         assert!(changes.changes.is_empty());
     }
     #[test]
@@ -494,10 +516,7 @@ mod tests {
                 b"def outer():\n    def inner():\n        return 2\n",
             )],
         );
-        let changes = classify_symbols(
-            &extract_snapshot(&before, true),
-            &extract_snapshot(&after, true),
-        );
+        let changes = classify_symbols(&extract_snapshot(&before), &extract_snapshot(&after));
         assert_eq!(changes.changes.len(), 1);
         assert_eq!(changes.changes[0].kind, SymbolChangeKind::Modified);
         assert_eq!(changes.changes[0].after.as_ref().unwrap().name, "inner");
@@ -505,7 +524,7 @@ mod tests {
     #[test]
     fn python_direct_and_non_call_fingerprints_separate_changes() {
         let symbol = |source: &'static [u8]| {
-            extract_snapshot(&snapshot(SnapshotRole::Base, &[(b"a.py", source)]), true).files
+            extract_snapshot(&snapshot(SnapshotRole::Base, &[(b"a.py", source)])).files
                 [&SourceUnitKey::python(b"a.py")]
                 .symbols[0]
                 .clone()
@@ -539,7 +558,7 @@ mod tests {
             SnapshotRole::Target,
             &[(b"a.py", b"def kept(:\n    pass\n")],
         );
-        let target = extract_snapshot(&after, true);
+        let target = extract_snapshot(&after);
         assert!(!target.complete);
         assert!(
             target
@@ -547,7 +566,7 @@ mod tests {
                 .iter()
                 .any(|d| d.kind == DiagnosticKind::ParseError)
         );
-        let changes = classify_symbols(&extract_snapshot(&before, true), &target);
+        let changes = classify_symbols(&extract_snapshot(&before), &target);
         assert!(!changes.complete);
         assert!(changes.changes.is_empty());
     }
@@ -561,7 +580,7 @@ mod tests {
                 (b"bad.py", b"\xff"),
             ],
         );
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         assert_eq!(
             result
                 .files
@@ -608,10 +627,7 @@ mod tests {
                 (b"same.py", b"def kept():\n    pass\n"),
             ],
         );
-        let result = classify_symbols(
-            &extract_snapshot(&base, true),
-            &extract_snapshot(&target, true),
-        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
         assert_eq!(result.changes.len(), 2);
         assert_eq!(result.changes[0].kind, SymbolChangeKind::Added);
         assert_eq!(result.changes[1].kind, SymbolChangeKind::Deleted);
@@ -627,19 +643,16 @@ mod tests {
             &[(b"a.py", b"import new\ndef f():\n    return 1\n")],
         );
         assert!(
-            classify_symbols(
-                &extract_snapshot(&base, true),
-                &extract_snapshot(&target, true)
-            )
-            .changes
-            .is_empty()
+            classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target))
+                .changes
+                .is_empty()
         );
     }
     #[test]
     fn bindings_and_call_ranges_are_retained() {
         let src = "def outer(π):\n    global x\n    local = helper(π)\n    return local\n";
         let snap = snapshot(SnapshotRole::Target, &[(b"a.py", src.as_bytes())]);
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         let file = result.files.get(&SourceUnitKey::python(b"a.py")).unwrap();
         assert!(
             file.bindings
@@ -671,10 +684,7 @@ mod tests {
             &[(b"a.py", b"def f(): pass\ndef f(): pass\n")],
         );
         let target = snapshot(SnapshotRole::Target, &[(b"a.py", b"def f(): pass\n")]);
-        let result = classify_symbols(
-            &extract_snapshot(&base, true),
-            &extract_snapshot(&target, true),
-        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
         assert!(
             result
                 .diagnostics
@@ -689,10 +699,7 @@ mod tests {
         let source = b"def f(): return 1\ndef f(): return 2\n";
         let base = snapshot(SnapshotRole::Base, &[(b"a.py", source)]);
         let target = snapshot(SnapshotRole::Target, &[(b"a.py", source)]);
-        let result = classify_symbols(
-            &extract_snapshot(&base, true),
-            &extract_snapshot(&target, true),
-        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
         assert!(result.changes.is_empty());
         assert!(
             result
@@ -705,7 +712,7 @@ mod tests {
     fn imports_follow_syntax_nodes_and_preserve_relative_members() {
         let source = b"from . import foo\nfrom pkg import\tbar as baz\nfrom pkg import(\n    qux, # ignored\n    zip as zap,\n)\nimport alpha.beta as ab, gamma\n";
         let snap = snapshot(SnapshotRole::Target, &[(b"a.py", source)]);
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         let file = result.files.get(&SourceUnitKey::python(b"a.py")).unwrap();
         assert!(file.valid);
         assert_eq!(file.imports.len(), 6);
@@ -741,7 +748,7 @@ mod tests {
         let source =
             b"def f(): pass\ndef outer(values):\n    for f, (x, y) in values:\n        f()\n";
         let snap = snapshot(SnapshotRole::Target, &[(b"a.py", source)]);
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         let file = result.files.get(&SourceUnitKey::python(b"a.py")).unwrap();
         let outer = file.symbols.iter().find(|s| s.name == "outer").unwrap();
         for name in ["f", "x", "y"] {
@@ -759,7 +766,7 @@ mod tests {
                 b"def f(obj):\n    obj.field = 1\n    x, y = pair()\n",
             )],
         );
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         let file = result.files.get(&SourceUnitKey::python(b"a.py")).unwrap();
         assert_eq!(file.bindings.iter().filter(|b| b.name == "obj").count(), 1);
         assert!(
@@ -781,7 +788,7 @@ mod tests {
             (b"src/pkg/__init__.py", b""),
             (b"src/pkg/m.py", code),
         ];
-        let ambiguous = extract_snapshot(&snapshot(SnapshotRole::Target, files), true);
+        let ambiguous = extract_snapshot(&snapshot(SnapshotRole::Target, files));
         assert!(
             ambiguous
                 .diagnostics
@@ -800,7 +807,7 @@ mod tests {
                 (b"src/pkg/m.py", code),
             ],
         );
-        let resolved = extract_snapshot(&configured, true);
+        let resolved = extract_snapshot(&configured);
         assert_eq!(
             resolved
                 .files
@@ -830,7 +837,7 @@ mod tests {
                 (b"lib/pkg/m.py", b"def f(): pass\n"),
             ],
         );
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         assert!(
             result
                 .files
@@ -854,7 +861,7 @@ mod tests {
         );
         let target = snapshot(SnapshotRole::Target, &[(b"pkg/m.py", b"def f(): pass\n")]);
         assert_eq!(
-            extract_snapshot(&base, true)
+            extract_snapshot(&base)
                 .files
                 .get(&SourceUnitKey::python(b"pkg/m.py"))
                 .unwrap()
@@ -862,7 +869,7 @@ mod tests {
                 .as_deref(),
             Some("pkg.m")
         );
-        let target_result = extract_snapshot(&target, true);
+        let target_result = extract_snapshot(&target);
         assert!(
             target_result
                 .files
@@ -882,7 +889,7 @@ mod tests {
     fn with_except_walrus_and_comprehension_bindings_are_recorded() {
         let code = b"def f(xs):\n    with acquire() as resource:\n        resource()\n    try:\n        pass\n    except Error as caught:\n        caught()\n    if (chosen := pick()):\n        chosen()\n    return [item() for item in xs]\n";
         let snap = snapshot(SnapshotRole::Target, &[(b"a.py", code)]);
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         let file = result.files.get(&SourceUnitKey::python(b"a.py")).unwrap();
         let f = file.symbols.iter().find(|s| s.name == "f").unwrap();
         for name in ["resource", "caught", "chosen"] {
@@ -920,10 +927,7 @@ mod tests {
             SnapshotRole::Target,
             &[(b"a.py", b"def f(): return 2\ndef f(): return 1\n")],
         );
-        let result = classify_symbols(
-            &extract_snapshot(&base, true),
-            &extract_snapshot(&target, true),
-        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
         assert_eq!(result.changes.len(), 4);
         assert!(
             result
@@ -945,10 +949,7 @@ mod tests {
                 b"def f(\n    x, y\n):\n    \"new\"\n    return x\n",
             )],
         );
-        let result = classify_symbols(
-            &extract_snapshot(&base, true),
-            &extract_snapshot(&target, true),
-        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
         assert_eq!(result.changes.len(), 1);
         assert_eq!(result.changes[0].kind, SymbolChangeKind::Modified);
         let range = result.changes[0].after.as_ref().unwrap().source.range;
@@ -966,7 +967,7 @@ mod tests {
                 b"def f(xs):\n    return [(chosen := item()) for item in xs]\n",
             )],
         );
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         let file = result.files.get(&SourceUnitKey::python(b"a.py")).unwrap();
         assert!(file.valid);
         let f = file.symbols.iter().find(|s| s.name == "f").unwrap();
@@ -993,10 +994,7 @@ mod tests {
             SnapshotRole::Target,
             &[(b"a.py", b"def f():\n    \"new\"\n")],
         );
-        let result = classify_symbols(
-            &extract_snapshot(&base, true),
-            &extract_snapshot(&target, true),
-        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
         assert_eq!(result.changes.len(), 1);
         assert_eq!(result.changes[0].kind, SymbolChangeKind::Modified);
     }
@@ -1008,10 +1006,7 @@ mod tests {
             SnapshotRole::Target,
             &[(b"new.py", b"@new\ndef f(): pass\n")],
         );
-        let result = classify_symbols(
-            &extract_snapshot(&base, true),
-            &extract_snapshot(&target, true),
-        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
         assert_eq!(result.changes.len(), 2);
         assert!(
             result
@@ -1027,10 +1022,7 @@ mod tests {
         );
         let base = snapshot(SnapshotRole::Base, &[(b"a.py", b"@old\ndef f(): pass\n")]);
         let target = snapshot(SnapshotRole::Target, &[(b"a.py", b"@new\ndef f(): pass\n")]);
-        let result = classify_symbols(
-            &extract_snapshot(&base, true),
-            &extract_snapshot(&target, true),
-        );
+        let result = classify_symbols(&extract_snapshot(&base), &extract_snapshot(&target));
         assert_eq!(result.changes[0].kind, SymbolChangeKind::Modified);
     }
     #[test]
@@ -1039,7 +1031,7 @@ mod tests {
             SnapshotRole::Target,
             &[(b"a.py", b"\xef\xbb\xbfdef f():\n    pass\n")],
         );
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         let file = result.files.get(&SourceUnitKey::python(b"a.py")).unwrap();
         let range = file.symbols[0].source.range;
         assert_eq!(range.start_byte, 3);
@@ -1049,7 +1041,7 @@ mod tests {
     #[test]
     fn nonlocal_and_nested_class_scope_are_retained() {
         let snap = snapshot(SnapshotRole::Target, &[(b"a.py", b"def outer():\n    x = 1\n    def inner():\n        nonlocal x\n        class Local:\n            async def method(self):\n                return x\n")]);
-        let result = extract_snapshot(&snap, true);
+        let result = extract_snapshot(&snap);
         let file = result.files.get(&SourceUnitKey::python(b"a.py")).unwrap();
         let inner = file
             .symbols
@@ -1072,36 +1064,30 @@ mod tests {
             b"Cargo.toml".as_slice(),
             b"[package]\nname='changes'\nversion='0.1.0'\n".as_slice(),
         );
-        let base = extract_snapshot(
-            &snapshot(
-                SnapshotRole::Base,
-                &[
-                    manifest,
-                    (b"src/lib.rs", b"mod source;\nmod destination;\n".as_slice()),
-                    (
-                        b"src/source.rs",
-                        b"pub fn moved() -> u32 { 1 }\n".as_slice(),
-                    ),
-                    (b"src/destination.rs", b"".as_slice()),
-                ],
-            ),
-            true,
-        );
-        let target = extract_snapshot(
-            &snapshot(
-                SnapshotRole::Target,
-                &[
-                    manifest,
-                    (b"src/lib.rs", b"mod source;\nmod destination;\n".as_slice()),
-                    (b"src/source.rs", b"".as_slice()),
-                    (
-                        b"src/destination.rs",
-                        b"pub fn moved() -> u32 { 1 }\n".as_slice(),
-                    ),
-                ],
-            ),
-            true,
-        );
+        let base = extract_snapshot(&snapshot(
+            SnapshotRole::Base,
+            &[
+                manifest,
+                (b"src/lib.rs", b"mod source;\nmod destination;\n".as_slice()),
+                (
+                    b"src/source.rs",
+                    b"pub fn moved() -> u32 { 1 }\n".as_slice(),
+                ),
+                (b"src/destination.rs", b"".as_slice()),
+            ],
+        ));
+        let target = extract_snapshot(&snapshot(
+            SnapshotRole::Target,
+            &[
+                manifest,
+                (b"src/lib.rs", b"mod source;\nmod destination;\n".as_slice()),
+                (b"src/source.rs", b"".as_slice()),
+                (
+                    b"src/destination.rs",
+                    b"pub fn moved() -> u32 { 1 }\n".as_slice(),
+                ),
+            ],
+        ));
         let changes = classify_symbols(&base, &target);
         assert!(changes.complete);
         assert_eq!(changes.changes.len(), 2);
@@ -1127,13 +1113,10 @@ mod tests {
             b"Cargo.toml".as_slice(),
             b"[package]\nname='errors'\nversion='0.1.0'\n".as_slice(),
         );
-        let malformed = extract_snapshot(
-            &snapshot(
-                SnapshotRole::Target,
-                &[manifest, (b"src/lib.rs", b"fn broken( {\n".as_slice())],
-            ),
-            true,
-        );
+        let malformed = extract_snapshot(&snapshot(
+            SnapshotRole::Target,
+            &[manifest, (b"src/lib.rs", b"fn broken( {\n".as_slice())],
+        ));
         assert!(!malformed.complete);
         assert!(
             malformed
@@ -1141,13 +1124,10 @@ mod tests {
                 .iter()
                 .any(|d| d.kind == DiagnosticKind::ParseError)
         );
-        let invalid = extract_snapshot(
-            &snapshot(
-                SnapshotRole::Target,
-                &[manifest, (b"src/lib.rs", b"fn broken() {}\xff".as_slice())],
-            ),
-            true,
-        );
+        let invalid = extract_snapshot(&snapshot(
+            SnapshotRole::Target,
+            &[manifest, (b"src/lib.rs", b"fn broken() {}\xff".as_slice())],
+        ));
         assert!(!invalid.complete);
         assert!(
             invalid
@@ -1155,16 +1135,13 @@ mod tests {
                 .iter()
                 .any(|d| d.kind == DiagnosticKind::InvalidEncoding)
         );
-        let uncertain = extract_snapshot(
-            &snapshot(
-                SnapshotRole::Target,
-                &[
-                    manifest,
-                    (b"src/lib.rs", b"pub fn caller() { unknown(); }".as_slice()),
-                ],
-            ),
-            true,
-        );
+        let uncertain = extract_snapshot(&snapshot(
+            SnapshotRole::Target,
+            &[
+                manifest,
+                (b"src/lib.rs", b"pub fn caller() { unknown(); }".as_slice()),
+            ],
+        ));
         assert!(uncertain.complete);
     }
 }
