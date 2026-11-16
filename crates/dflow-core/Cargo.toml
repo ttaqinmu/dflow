@@ -5,10 +5,12 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
+anyhow = { workspace = true }
 git2 = "0.20"
 petgraph = "0.8"
 serde_json = "1"
 sha2 = "0.10"
+thiserror = { workspace = true }
 tree-sitter = "0.25"
 tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24.2"

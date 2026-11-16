@@ -1,13 +1,33 @@
 use crate::comparison::{Comparison, LocalSelection};
+use anyhow::Context;
 use git2::{ErrorCode, ObjectType, Oid, Repository};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::fmt;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+fn path_from_bytes(bytes: &[u8]) -> PathBuf {
+    PathBuf::from(OsString::from_vec(bytes.to_vec()))
+}
+
+#[cfg(unix)]
+fn path_bytes(path: &Path) -> Vec<u8> {
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(unix))]
+fn path_from_bytes(bytes: &[u8]) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+}
+
+#[cfg(not(unix))]
+fn path_bytes(path: &Path) -> Vec<u8> {
+    path.to_string_lossy().as_bytes().to_vec()
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SnapshotKind {
@@ -16,17 +36,20 @@ pub enum SnapshotKind {
     WorkingTree,
     Empty,
 }
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub enum SnapshotRole {
     Base,
     Target,
 }
+
 #[derive(Debug, Clone)]
 pub struct CapturedFile {
     pub path: Vec<u8>,
     pub bytes: Vec<u8>,
     pub mode: u32,
 }
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // Consumed by analysis/report milestones after M1.
 pub struct CapturedSnapshot {
@@ -37,40 +60,49 @@ pub struct CapturedSnapshot {
     pub files: BTreeMap<Vec<u8>, CapturedFile>,
     pub content_id: String,
 }
+
 #[derive(Debug)]
 pub struct SnapshotPair {
     pub base: CapturedSnapshot,
     pub target: CapturedSnapshot,
 }
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ChangeKind {
     Added,
     Modified,
     Deleted,
 }
+
 #[derive(Debug)]
-#[allow(dead_code)] // Consumed by analysis/report milestones after M1.
+#[allow(dead_code)]
 pub struct FileChange {
     pub path: Vec<u8>,
     pub kind: ChangeKind,
 }
+
 #[derive(Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Consumed by analysis/report milestones after M1.
+#[allow(dead_code)]
 pub struct Diagnostic {
     pub path: Vec<u8>,
     pub message: String,
 }
+
 #[derive(Debug)]
 pub struct CaptureResult {
     pub pair: SnapshotPair,
     pub changes: Vec<FileChange>,
     pub diagnostics: Vec<Diagnostic>,
 }
-#[derive(Debug)]
+
+#[derive(Debug, thiserror::Error)]
 pub enum CaptureError {
+    #[error("{0}")]
     Input(String),
-    Analysis(String),
+    #[error("{0:#}")]
+    Analysis(#[source] anyhow::Error),
 }
+
 impl CaptureError {
     pub fn exit_code(&self) -> i32 {
         match self {
@@ -79,55 +111,13 @@ impl CaptureError {
         }
     }
 }
-impl fmt::Display for CaptureError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Input(s) | Self::Analysis(s) => f.write_str(s),
-        }
-    }
-}
+
 type Result<T> = std::result::Result<T, CaptureError>;
-fn analysis(e: impl fmt::Display) -> CaptureError {
-    CaptureError::Analysis(e.to_string())
-}
-fn input(e: impl fmt::Display) -> CaptureError {
-    CaptureError::Input(e.to_string())
-}
+
 fn relevant(path: &[u8], include_test: bool) -> bool {
     (include_test || !crate::languages::is_test_path(path)) && crate::languages::capture_path(path)
 }
 
-fn hash_files(files: &BTreeMap<Vec<u8>, CapturedFile>) -> String {
-    let mut h = Sha256::new();
-    for file in files.values() {
-        for part in [
-            &file.path[..],
-            &file.mode.to_be_bytes()[..],
-            &file.bytes[..],
-        ] {
-            h.update((part.len() as u64).to_be_bytes());
-            h.update(part);
-        }
-    }
-    format!("{:x}", h.finalize())
-}
-fn snapshot(
-    kind: SnapshotKind,
-    role: SnapshotRole,
-    commit_id: Option<Oid>,
-    branch: Option<String>,
-    files: BTreeMap<Vec<u8>, CapturedFile>,
-) -> CapturedSnapshot {
-    let content_id = hash_files(&files);
-    CapturedSnapshot {
-        kind,
-        role,
-        commit_id,
-        branch,
-        files,
-        content_id,
-    }
-}
 fn insert_blob(
     repo: &Repository,
     files: &mut BTreeMap<Vec<u8>, CapturedFile>,
@@ -137,7 +127,9 @@ fn insert_blob(
     include_test: bool,
 ) -> Result<()> {
     if relevant(&path, include_test) {
-        let blob = repo.find_blob(oid).map_err(analysis)?;
+        let blob = repo
+            .find_blob(oid)
+            .map_err(|e| CaptureError::Analysis(e.into()))?;
         files.insert(
             path.clone(),
             CapturedFile {
@@ -149,6 +141,7 @@ fn insert_blob(
     }
     Ok(())
 }
+
 fn walk_tree(
     repo: &Repository,
     tree: &git2::Tree<'_>,
@@ -163,7 +156,9 @@ fn walk_tree(
         match entry.kind() {
             Some(ObjectType::Tree) => {
                 path.push(b'/');
-                let child = repo.find_tree(entry.id()).map_err(analysis)?;
+                let child = repo
+                    .find_tree(entry.id())
+                    .map_err(|e| CaptureError::Analysis(e.into()))?;
                 walk_tree(repo, &child, &path, files, diagnostics, include_test)?;
             }
             Some(ObjectType::Blob) if entry.filemode() == 0o120000 => {
@@ -191,6 +186,7 @@ fn walk_tree(
     }
     Ok(())
 }
+
 fn collect_gitlinks(
     repo: &Repository,
     tree: &git2::Tree<'_>,
@@ -206,7 +202,9 @@ fn collect_gitlinks(
             }
             Some(ObjectType::Tree) => {
                 path.push(b'/');
-                let child = repo.find_tree(entry.id()).map_err(analysis)?;
+                let child = repo
+                    .find_tree(entry.id())
+                    .map_err(|e| CaptureError::Analysis(e.into()))?;
                 collect_gitlinks(repo, &child, &path, gitlinks)?;
             }
             _ => {}
@@ -214,131 +212,7 @@ fn collect_gitlinks(
     }
     Ok(())
 }
-fn commit_snapshot(
-    repo: &Repository,
-    oid: Oid,
-    role: SnapshotRole,
-    branch: Option<String>,
-    diagnostics: &mut Vec<Diagnostic>,
-    include_test: bool,
-) -> Result<CapturedSnapshot> {
-    let commit = repo.find_commit(oid).map_err(analysis)?;
-    let tree = commit.tree().map_err(analysis)?;
-    let mut files = BTreeMap::new();
-    walk_tree(repo, &tree, b"", &mut files, diagnostics, include_test)?;
-    Ok(snapshot(
-        SnapshotKind::Commit,
-        role,
-        Some(oid),
-        branch,
-        files,
-    ))
-}
-fn head_snapshot(
-    repo: &Repository,
-    diagnostics: &mut Vec<Diagnostic>,
-    include_test: bool,
-) -> Result<CapturedSnapshot> {
-    match repo.head() {
-        Ok(head) => {
-            let oid = head.peel_to_commit().map_err(analysis)?.id();
-            commit_snapshot(
-                repo,
-                oid,
-                SnapshotRole::Base,
-                None,
-                diagnostics,
-                include_test,
-            )
-        }
-        Err(e) if e.code() == ErrorCode::UnbornBranch => Ok(snapshot(
-            SnapshotKind::Empty,
-            SnapshotRole::Base,
-            None,
-            None,
-            BTreeMap::new(),
-        )),
-        Err(e) => Err(input(e)),
-    }
-}
-fn index_snapshot(
-    repo: &Repository,
-    role: SnapshotRole,
-    diagnostics: &mut Vec<Diagnostic>,
-    include_test: bool,
-) -> Result<CapturedSnapshot> {
-    let index = repo.index().map_err(analysis)?;
-    if index.has_conflicts() {
-        return Err(input("index has unresolved conflicts"));
-    }
-    let mut files = BTreeMap::new();
-    for entry in index.iter() {
-        if (entry.flags >> 12) & 3 != 0 {
-            return Err(input("index has unresolved conflicts"));
-        }
-        if entry.mode == 0o120000 {
-            if relevant(&entry.path, include_test) {
-                diagnostics.push(Diagnostic {
-                    path: entry.path,
-                    message: "symlink source skipped".into(),
-                });
-            }
-            continue;
-        }
-        if entry.mode == 0o160000 {
-            diagnostics.push(Diagnostic {
-                path: entry.path,
-                message: "submodule skipped".into(),
-            });
-            continue;
-        }
-        insert_blob(
-            repo,
-            &mut files,
-            entry.path,
-            entry.id,
-            entry.mode,
-            include_test,
-        )?;
-    }
-    Ok(snapshot(SnapshotKind::Index, role, None, None, files))
-}
-#[cfg(unix)]
-fn path_from_bytes(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(OsString::from_vec(bytes.to_vec()))
-}
-#[cfg(unix)]
-fn path_bytes(path: &Path) -> Vec<u8> {
-    path.as_os_str().as_bytes().to_vec()
-}
-#[cfg(not(unix))]
-fn path_from_bytes(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
-}
-#[cfg(not(unix))]
-fn path_bytes(path: &Path) -> Vec<u8> {
-    path.to_string_lossy().as_bytes().to_vec()
-}
-fn has_symlink_ancestor(root: &Path, relative: &Path) -> Result<bool> {
-    let mut parent = root.to_path_buf();
-    if let Some(ancestors) = relative.parent() {
-        for component in ancestors.components() {
-            parent.push(component);
-            match fs::symlink_metadata(&parent) {
-                Ok(metadata) if metadata.file_type().is_symlink() => return Ok(true),
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(e) => {
-                    return Err(analysis(format!(
-                        "cannot inspect {}: {e}",
-                        parent.display()
-                    )));
-                }
-            }
-        }
-    }
-    Ok(false)
-}
+
 fn discover_untracked(
     repo: &Repository,
     root: &Path,
@@ -348,17 +222,27 @@ fn discover_untracked(
     candidates: &mut BTreeSet<Vec<u8>>,
     include_test: bool,
 ) -> Result<()> {
-    for item in fs::read_dir(dir).map_err(analysis)? {
-        let item = item.map_err(analysis)?;
+    for item in fs::read_dir(dir)
+        .with_context(|| format!("cannot read directory {}", dir.display()))
+        .map_err(|e| CaptureError::Analysis(e.into()))?
+    {
+        let item = item.map_err(|e| CaptureError::Analysis(e.into()))?;
         let path = item.path();
-        let relative = path.strip_prefix(root).map_err(analysis)?;
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|e| CaptureError::Analysis(e.into()))?;
+
         if relative == Path::new(".git") {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path).map_err(analysis)?;
+
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("cannot inspect {}", path.display()))
+            .map_err(|e| CaptureError::Analysis(e.into()))?;
         if metadata.file_type().is_symlink() {
             continue;
         }
+
         let raw = path_bytes(relative);
         if metadata.is_dir() {
             if gitlinks.contains(&raw) {
@@ -367,10 +251,13 @@ fn discover_untracked(
             if !tracked
                 .iter()
                 .any(|p| p.starts_with(&[raw.as_slice(), b"/"].concat()))
-                && repo.is_path_ignored(relative).map_err(analysis)?
+                && repo
+                    .is_path_ignored(relative)
+                    .map_err(|e| CaptureError::Analysis(e.into()))?
             {
                 continue;
             }
+
             discover_untracked(
                 repo,
                 root,
@@ -383,120 +270,312 @@ fn discover_untracked(
         } else if metadata.is_file()
             && relevant(&raw, include_test)
             && !tracked.contains(&raw)
-            && !repo.is_path_ignored(relative).map_err(analysis)?
+            && !repo
+                .is_path_ignored(relative)
+                .map_err(|e| CaptureError::Analysis(e.into()))?
         {
             candidates.insert(raw);
         }
     }
     Ok(())
 }
-fn worktree_snapshot(
-    repo: &Repository,
-    role: SnapshotRole,
-    tracked: &BTreeSet<Vec<u8>>,
-    gitlinks: &BTreeSet<Vec<u8>>,
-    diagnostics: &mut Vec<Diagnostic>,
-    include_test: bool,
-) -> Result<CapturedSnapshot> {
-    let root = repo
-        .workdir()
-        .ok_or_else(|| input("local mode requires a working tree"))?;
-    let mut candidates: BTreeSet<_> = tracked.difference(gitlinks).cloned().collect();
-    discover_untracked(
-        repo,
-        root,
-        root,
-        tracked,
-        gitlinks,
-        &mut candidates,
-        include_test,
-    )?;
-    let mut files = BTreeMap::new();
-    for path in candidates {
-        if !relevant(&path, include_test) {
-            continue;
-        }
-        let relative = path_from_bytes(&path);
-        if has_symlink_ancestor(root, &relative)? {
-            diagnostics.push(Diagnostic {
-                path,
-                message: "symlink source skipped".into(),
-            });
-            continue;
-        }
-        let full = root.join(relative);
-        match fs::symlink_metadata(&full) {
-            Ok(m) if m.file_type().is_symlink() => diagnostics.push(Diagnostic {
-                path,
-                message: "symlink source skipped".into(),
-            }),
-            Ok(m) if m.is_file() => {
-                let bytes = fs::read(&full)
-                    .map_err(|e| analysis(format!("cannot read {}: {e}", full.display())))?;
-                #[cfg(unix)]
-                let mode = if std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0
-                {
-                    0o100755
-                } else {
-                    0o100644
-                };
-                #[cfg(not(unix))]
-                let mode = 0o100644;
-                files.insert(path.clone(), CapturedFile { path, bytes, mode });
-            }
-            Ok(_) => {
-                return Err(analysis(format!(
-                    "source path is not a regular file: {}",
-                    full.display()
-                )));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                if !tracked.contains(&path) {
-                    return Err(analysis(format!(
-                        "source disappeared while capturing: {}",
-                        full.display()
+
+fn has_symlink_ancestor(root: &Path, relative: &Path) -> Result<bool> {
+    let mut parent = root.to_path_buf();
+    if let Some(ancestors) = relative.parent() {
+        for component in ancestors.components() {
+            parent.push(component);
+            match fs::symlink_metadata(&parent) {
+                Ok(metadata) if metadata.file_type().is_symlink() => return Ok(true),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => {
+                    return Err(CaptureError::Analysis(anyhow::anyhow!(
+                        "cannot inspect {}: {e}",
+                        parent.display()
                     )));
                 }
-                // The tracked source was deleted from the worktree.
             }
-            Err(e) => return Err(analysis(format!("cannot inspect {}: {e}", full.display()))),
         }
     }
-    Ok(snapshot(SnapshotKind::WorkingTree, role, None, None, files))
+    Ok(false)
 }
+
 fn branch_oid(repo: &Repository, name: &str) -> Result<(Oid, String)> {
     if name.is_empty() || name.starts_with('-') || name.contains("..") || name.contains('@') {
-        return Err(input("invalid branch name"));
+        return Err(CaptureError::Input("invalid branch name".into()));
     }
+
     let candidates: Vec<String> =
         if name.starts_with("refs/heads/") || name.starts_with("refs/remotes/") {
             vec![name.into()]
         } else {
             vec![format!("refs/heads/{name}"), format!("refs/remotes/{name}")]
         };
+
     let mut found = Vec::new();
     for candidate in candidates {
         if !git2::Reference::is_valid_name(&candidate) {
-            return Err(input(format!("invalid branch name: {name}")));
+            return Err(CaptureError::Input(format!("invalid branch name: {name}")));
         }
         match repo.find_reference(&candidate) {
             Ok(reference) => {
                 let oid = reference
                     .peel_to_commit()
-                    .map_err(|_| input(format!("branch does not point to a commit: {candidate}")))?
+                    .map_err(|_| {
+                        CaptureError::Input(format!(
+                            "branch does not point to a commit: {candidate}"
+                        ))
+                    })?
                     .id();
                 found.push((oid, candidate));
             }
             Err(e) if e.code() == ErrorCode::NotFound => {}
-            Err(e) => return Err(input(e)),
+            Err(e) => return Err(CaptureError::Input(e.to_string())),
         }
     }
+
     match found.len() {
-        0 => Err(input(format!("branch not found: {name}"))),
+        0 => Err(CaptureError::Input(format!("branch not found: {name}"))),
         1 => Ok(found.remove(0)),
-        _ => Err(input(format!("ambiguous branch name: {name}"))),
+        _ => Err(CaptureError::Input(format!(
+            "ambiguous branch name: {name}"
+        ))),
     }
 }
+
+impl CapturedSnapshot {
+    fn generate_content_id(files: &BTreeMap<Vec<u8>, CapturedFile>) -> String {
+        let mut h = Sha256::new();
+        for file in files.values() {
+            for part in [
+                &file.path[..],
+                &file.mode.to_be_bytes()[..],
+                &file.bytes[..],
+            ] {
+                h.update((part.len() as u64).to_be_bytes());
+                h.update(part);
+            }
+        }
+        format!("{:x}", h.finalize())
+    }
+
+    fn from_commit(
+        repo: &Repository,
+        oid: Oid,
+        role: SnapshotRole,
+        branch: Option<String>,
+        diagnostics: &mut Vec<Diagnostic>,
+        include_test: bool,
+    ) -> Result<Self> {
+        let commit = repo
+            .find_commit(oid)
+            .map_err(|e| CaptureError::Analysis(e.into()))?;
+        let tree = commit
+            .tree()
+            .map_err(|e| CaptureError::Analysis(e.into()))?;
+        let mut files = BTreeMap::new();
+
+        walk_tree(repo, &tree, b"", &mut files, diagnostics, include_test)?;
+
+        let content_id = Self::generate_content_id(&files);
+
+        Ok(Self {
+            kind: SnapshotKind::Commit,
+            role,
+            commit_id: Some(oid),
+            branch,
+            files,
+            content_id,
+        })
+    }
+
+    fn from_head(
+        repo: &Repository,
+        diagnostics: &mut Vec<Diagnostic>,
+        include_test: bool,
+    ) -> Result<Self> {
+        match repo.head() {
+            Ok(head) => {
+                let oid = head
+                    .peel_to_commit()
+                    .map_err(|e| CaptureError::Analysis(e.into()))?
+                    .id();
+                Self::from_commit(
+                    repo,
+                    oid,
+                    SnapshotRole::Base,
+                    None,
+                    diagnostics,
+                    include_test,
+                )
+            }
+            Err(e) if e.code() == ErrorCode::UnbornBranch => {
+                let content_id = Self::generate_content_id(&BTreeMap::new());
+                Ok(Self {
+                    kind: SnapshotKind::Empty,
+                    role: SnapshotRole::Base,
+                    commit_id: None,
+                    branch: None,
+                    files: BTreeMap::new(),
+                    content_id,
+                })
+            }
+            Err(e) => Err(CaptureError::Input(e.to_string())),
+        }
+    }
+
+    fn from_index(
+        repo: &Repository,
+        role: SnapshotRole,
+        diagnostics: &mut Vec<Diagnostic>,
+        include_test: bool,
+    ) -> Result<Self> {
+        let index = repo.index().map_err(|e| CaptureError::Analysis(e.into()))?;
+        if index.has_conflicts() {
+            return Err(CaptureError::Input("index has unresolved conflicts".into()));
+        }
+
+        let mut files = BTreeMap::new();
+        for entry in index.iter() {
+            if (entry.flags >> 12) & 3 != 0 {
+                return Err(CaptureError::Input("index has unresolved conflicts".into()));
+            }
+
+            if entry.mode == 0o120000 {
+                if relevant(&entry.path, include_test) {
+                    diagnostics.push(Diagnostic {
+                        path: entry.path,
+                        message: "symlink source skipped".into(),
+                    });
+                }
+                continue;
+            }
+
+            if entry.mode == 0o160000 {
+                diagnostics.push(Diagnostic {
+                    path: entry.path,
+                    message: "submodule skipped".into(),
+                });
+                continue;
+            }
+
+            insert_blob(
+                repo,
+                &mut files,
+                entry.path,
+                entry.id,
+                entry.mode,
+                include_test,
+            )?;
+        }
+
+        let content_id = Self::generate_content_id(&files);
+        Ok(Self {
+            kind: SnapshotKind::Index,
+            role,
+            commit_id: None,
+            branch: None,
+            files,
+            content_id,
+        })
+    }
+
+    fn from_worktree(
+        repo: &Repository,
+        role: SnapshotRole,
+        tracked: &BTreeSet<Vec<u8>>,
+        gitlinks: &BTreeSet<Vec<u8>>,
+        diagnostics: &mut Vec<Diagnostic>,
+        include_test: bool,
+    ) -> Result<Self> {
+        let root = repo
+            .workdir()
+            .ok_or_else(|| CaptureError::Input("local mode requires a working tree".into()))?;
+
+        let mut candidates: BTreeSet<_> = tracked.difference(gitlinks).cloned().collect();
+
+        discover_untracked(
+            repo,
+            root,
+            root,
+            tracked,
+            gitlinks,
+            &mut candidates,
+            include_test,
+        )?;
+
+        let mut files = BTreeMap::new();
+        for path in candidates {
+            if !relevant(&path, include_test) {
+                continue;
+            }
+
+            let relative = path_from_bytes(&path);
+            if has_symlink_ancestor(root, &relative)? {
+                diagnostics.push(Diagnostic {
+                    path,
+                    message: "symlink source skipped".into(),
+                });
+                continue;
+            }
+
+            let full = root.join(relative);
+            match fs::symlink_metadata(&full) {
+                Ok(m) if m.file_type().is_symlink() => diagnostics.push(Diagnostic {
+                    path,
+                    message: "symlink source skipped".into(),
+                }),
+                Ok(m) if m.is_file() => {
+                    let bytes = fs::read(&full)
+                        .with_context(|| format!("cannot read {}", full.display()))
+                        .map_err(|e| CaptureError::Analysis(e.into()))?;
+                    #[cfg(unix)]
+                    let mode =
+                        if std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0 {
+                            0o100755
+                        } else {
+                            0o100644
+                        };
+                    #[cfg(not(unix))]
+                    let mode = 0o100644;
+                    files.insert(path.clone(), CapturedFile { path, bytes, mode });
+                }
+                Ok(_) => {
+                    return Err(CaptureError::Analysis(anyhow::anyhow!(
+                        "source path is not a regular file: {}",
+                        full.display()
+                    )));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    if !tracked.contains(&path) {
+                        return Err(CaptureError::Analysis(anyhow::anyhow!(
+                            "source disappeared while capturing: {}",
+                            full.display()
+                        )));
+                    }
+                    // The tracked source was deleted from the worktree.
+                }
+                Err(e) => {
+                    return Err(CaptureError::Analysis(anyhow::anyhow!(
+                        "cannot inspect {}: {e}",
+                        full.display()
+                    )));
+                }
+            }
+        }
+        let content_id = Self::generate_content_id(&files);
+        Ok(Self {
+            kind: SnapshotKind::WorkingTree,
+            role,
+            commit_id: None,
+            branch: None,
+            files,
+            content_id,
+        })
+    }
+}
+
 fn changes(base: &CapturedSnapshot, target: &CapturedSnapshot) -> Vec<FileChange> {
     let paths: BTreeSet<_> = base
         .files
@@ -504,6 +583,7 @@ fn changes(base: &CapturedSnapshot, target: &CapturedSnapshot) -> Vec<FileChange
         .chain(target.files.keys())
         .cloned()
         .collect();
+
     paths
         .into_iter()
         .filter_map(|path| {
@@ -519,19 +599,21 @@ fn changes(base: &CapturedSnapshot, target: &CapturedSnapshot) -> Vec<FileChange
         })
         .collect()
 }
+
 pub fn capture_comparison(
     mode: &Comparison,
     cwd: PathBuf,
     include_test: bool,
 ) -> Result<CaptureResult> {
-    let repo = Repository::discover(cwd).map_err(input)?;
+    let repo = Repository::discover(cwd).map_err(|e| CaptureError::Input(e.to_string()))?;
     let mut diagnostics = Vec::new();
+
     let pair = match mode {
         Comparison::Branch { base, target } => {
             let (base_oid, base_name) = branch_oid(&repo, base)?;
             let (target_oid, target_name) = branch_oid(&repo, target)?;
             SnapshotPair {
-                base: commit_snapshot(
+                base: CapturedSnapshot::from_commit(
                     &repo,
                     base_oid,
                     SnapshotRole::Base,
@@ -539,7 +621,7 @@ pub fn capture_comparison(
                     &mut diagnostics,
                     include_test,
                 )?,
-                target: commit_snapshot(
+                target: CapturedSnapshot::from_commit(
                     &repo,
                     target_oid,
                     SnapshotRole::Target,
@@ -551,45 +633,63 @@ pub fn capture_comparison(
         }
         Comparison::Local(selection) => {
             if repo.is_bare() {
-                return Err(input("local mode requires a working tree"));
+                return Err(CaptureError::Input(
+                    "local mode requires a working tree".into(),
+                ));
             }
-            // Detect conflicts regardless of local comparison selection.
-            let index = repo.index().map_err(analysis)?;
+
+            let index = repo.index().map_err(|e| CaptureError::Analysis(e.into()))?;
             if index.has_conflicts() {
-                return Err(input("index has unresolved conflicts"));
+                return Err(CaptureError::Input("index has unresolved conflicts".into()));
             }
+
             let base = if *selection == LocalSelection::Unstaged {
-                index_snapshot(&repo, SnapshotRole::Base, &mut diagnostics, include_test)?
+                CapturedSnapshot::from_index(
+                    &repo,
+                    SnapshotRole::Base,
+                    &mut diagnostics,
+                    include_test,
+                )?
             } else {
-                head_snapshot(&repo, &mut diagnostics, include_test)?
+                CapturedSnapshot::from_head(&repo, &mut diagnostics, include_test)?
             };
+
             let target = if *selection == LocalSelection::Staged {
-                index_snapshot(&repo, SnapshotRole::Target, &mut diagnostics, include_test)?
+                CapturedSnapshot::from_index(
+                    &repo,
+                    SnapshotRole::Target,
+                    &mut diagnostics,
+                    include_test,
+                )?
             } else {
                 let mut gitlinks: BTreeSet<_> = index
                     .iter()
                     .filter(|entry| entry.mode == 0o160000)
                     .map(|entry| entry.path)
                     .collect();
+
                 match repo.head() {
                     Ok(head) => {
                         let tree = head
                             .peel_to_commit()
-                            .map_err(analysis)?
+                            .map_err(|e| CaptureError::Analysis(e.into()))?
                             .tree()
-                            .map_err(analysis)?;
+                            .map_err(|e| CaptureError::Analysis(e.into()))?;
+
                         collect_gitlinks(&repo, &tree, b"", &mut gitlinks)?;
                     }
                     Err(e) if e.code() == ErrorCode::UnbornBranch => {}
-                    Err(e) => return Err(input(e)),
+                    Err(e) => return Err(CaptureError::Input(e.to_string())),
                 }
+
                 let tracked: BTreeSet<_> = base
                     .files
                     .keys()
                     .cloned()
                     .chain(index.iter().map(|e| e.path))
                     .collect();
-                worktree_snapshot(
+
+                CapturedSnapshot::from_worktree(
                     &repo,
                     SnapshotRole::Target,
                     &tracked,

@@ -11,6 +11,7 @@ fn main() {
         CompareMode::Local(local) => &local.options,
         CompareMode::Branch(branch) => &branch.options,
     };
+
     let format = match options.selected_output(
         std::io::stdin().is_terminal(),
         std::io::stdout().is_terminal(),
@@ -21,6 +22,7 @@ fn main() {
             std::process::exit(2);
         }
     };
+
     let cwd = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(error) => {
@@ -28,12 +30,15 @@ fn main() {
             std::process::exit(2);
         }
     };
+
     let discovery_dir = match cli.dir.as_ref() {
         Some(dir) if dir.is_absolute() => dir.clone(),
         Some(dir) => cwd.join(dir),
         None => cwd,
     };
+
     let comparison = cli.mode.comparison();
+
     match git::capture_comparison(&comparison, discovery_dir.clone(), cli.include_test) {
         Ok(capture) => {
             let session = report::AnalysisSession::new(capture, cli.include_test);
@@ -77,9 +82,11 @@ fn main() {
                 }
                 OutputTarget::Format(_) => {}
             }
+
             let OutputTarget::Format(format) = format else {
                 unreachable!()
             };
+
             let (mut encoded, format_name) = match format {
                 OutputFormat::Json => {
                     let value = session.report(&comparison, options.depth as usize);
@@ -106,14 +113,18 @@ fn main() {
                 }
                 OutputFormat::Tui => unreachable!("legacy TUI format maps to render"),
             };
+
+            use std::io::Write;
             encoded.push(b'\n');
+
             let stdout = std::io::stdout();
             let mut output = stdout.lock();
-            use std::io::Write;
+
             if let Err(error) = output.write_all(&encoded) {
                 eprintln!("cannot write {format_name}: {error}");
                 std::process::exit(1);
             }
+
             std::process::exit(if session.complete() { 0 } else { 1 });
         }
         Err(error) => {

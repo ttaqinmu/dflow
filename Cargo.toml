@@ -2,3 +2,7 @@
 resolver = "3"
 members = ["crates/dflow", "crates/dflow-core", "crates/dflow-tui", "crates/dflow-gui"]
 default-members = ["crates/dflow"]
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
