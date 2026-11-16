@@ -17,6 +17,7 @@ pub fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) ->
         DiagramFormat::Mermaid => "flowchart LR".to_owned(),
         DiagramFormat::Dot => "digraph dflow {\n  rankdir=LR;".to_owned(),
     };
+
     let ids: BTreeMap<&str, usize> = focused
         .impact
         .nodes
@@ -24,6 +25,7 @@ pub fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) ->
         .enumerate()
         .map(|(index, (view, _))| (view.as_str(), index))
         .collect();
+
     for (view, _) in &focused.impact.nodes {
         let provenance = &focused.nodes[view];
         let node = if let Some(native) = &provenance.target {
@@ -35,6 +37,7 @@ pub fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) ->
                 .expect("focused node has provenance");
             &session.base_graph.graph[session.base_graph.ids[native]]
         };
+
         let mut label = String::new();
         if let Some(symbol) = &node.symbol {
             write!(
@@ -48,7 +51,9 @@ pub fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) ->
             let basename = path.rsplit(|byte| *byte == b'/').next().unwrap_or(path);
             write!(label, "{} | {}", display_path(basename), display_path(path)).unwrap();
         }
+
         write!(label, " | {}", provenance_status(provenance)).unwrap();
+
         for change in &provenance.changes {
             let status = match change {
                 SymbolChangeKind::Added => "added",
@@ -59,6 +64,7 @@ pub fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) ->
         }
         node_line(&mut out, format, ids[view.as_str()], &label);
     }
+
     let mut changed_edges = focused.edge_status.iter().peekable();
     for ((caller, callee), contributors) in &focused.edges {
         let changed = if changed_edges
@@ -69,6 +75,7 @@ pub fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) ->
         } else {
             None
         };
+
         let status = match changed {
             Some(EdgeChangeKind::Added) => "+ target",
             Some(EdgeChangeKind::Deleted) => "- base",
@@ -87,6 +94,7 @@ pub fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) ->
                 }
             }
         };
+
         match format {
             DiagramFormat::Mermaid => write!(
                 out,
@@ -104,9 +112,11 @@ pub fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) ->
             .unwrap(),
         }
     }
+
     if ids.is_empty() {
         node_line(&mut out, format, 0, "No symbol or edge changes");
     }
+
     if !session.complete() {
         node_line(
             &mut out,
@@ -115,6 +125,7 @@ pub fn render(session: &AnalysisSession, depth: usize, format: DiagramFormat) ->
             "PARTIAL analysis",
         );
     }
+
     if matches!(format, DiagramFormat::Dot) {
         out.push_str("\n}");
     }

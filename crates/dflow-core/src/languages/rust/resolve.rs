@@ -47,21 +47,26 @@ impl<'a> RustIndex<'a> {
         let Some(files) = self.module_files(target, module) else {
             return Resolution::Unresolved(UnresolvedReason::UnknownModule);
         };
+
         if files.len() != 1 {
             return Resolution::Unresolved(UnresolvedReason::AmbiguousTarget);
         }
+
         let file = files[0];
         if file.imports.iter().any(|i| i.scope_id == 0 && i.wildcard) {
             return Resolution::Unresolved(UnresolvedReason::WildcardImport);
         }
+
         let bindings: Vec<_> = file
             .bindings
             .iter()
             .filter(|binding| binding.scope_id == 0 && binding.name == name)
             .collect();
+
         if bindings.len() > 1 {
             return Resolution::Unresolved(UnresolvedReason::AmbiguousBinding);
         }
+
         if let Some(binding) = bindings.first() {
             if binding.kind == BindingKind::Import {
                 return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
@@ -70,11 +75,13 @@ impl<'a> RustIndex<'a> {
                 return Resolution::Unresolved(UnresolvedReason::Shadowed);
             }
         }
+
         let symbols: Vec<_> = file
             .symbols
             .iter()
             .filter(|symbol| symbol.parent_scope == 0 && symbol.name == name)
             .collect();
+
         match symbols.as_slice() {
             [symbol] => Self::safe_symbol(symbol),
             [] => Resolution::Unresolved(UnresolvedReason::MissingTarget),
@@ -88,20 +95,25 @@ impl<'a> RustIndex<'a> {
         let Some(files) = self.module_files(target, module) else {
             return Resolution::Unresolved(UnresolvedReason::UnknownModule);
         };
+
         if files.len() != 1 {
             return Resolution::Unresolved(UnresolvedReason::AmbiguousTarget);
         }
+
         let file = files[0];
+
         if file.scopes.iter().any(|scope| {
             scope.kind == ScopeKind::RustTrait && scope.name == ty && scope.parent == Some(0)
         }) {
             return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
         }
+
         let type_bindings = file
             .bindings
             .iter()
             .filter(|binding| binding.scope_id == 0 && binding.name == ty)
             .collect::<Vec<_>>();
+
         if type_bindings.len() != 1 || type_bindings[0].kind != BindingKind::Definition {
             return Resolution::Unresolved(if type_bindings.len() > 1 {
                 UnresolvedReason::AmbiguousBinding
@@ -109,12 +121,15 @@ impl<'a> RustIndex<'a> {
                 UnresolvedReason::UnsupportedDispatch
             });
         }
+
         if type_bindings[0].conditional {
             return Resolution::Unresolved(UnresolvedReason::ConditionalCompilation);
         }
+
         if type_bindings[0].unknown_attribute {
             return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
         }
+
         let implementations: Vec<_> = file
             .scopes
             .iter()
@@ -126,6 +141,7 @@ impl<'a> RustIndex<'a> {
                         .is_some_and(|parent| file.scopes[parent].kind == ScopeKind::Module)
             })
             .collect();
+
         let [implementation] = implementations.as_slice() else {
             return Resolution::Unresolved(if implementations.is_empty() {
                 UnresolvedReason::UnsupportedDispatch
@@ -133,9 +149,11 @@ impl<'a> RustIndex<'a> {
                 UnresolvedReason::AmbiguousTarget
             });
         };
+
         if file.imports.iter().any(|i| i.scope_id == 0 && i.wildcard) {
             return Resolution::Unresolved(UnresolvedReason::WildcardImport);
         }
+
         let methods: Vec<_> = file
             .symbols
             .iter()
@@ -145,6 +163,7 @@ impl<'a> RustIndex<'a> {
                     && matches!(s.kind, SymbolKind::Method | SymbolKind::AsyncMethod)
             })
             .collect();
+
         match methods.as_slice() {
             [method] => Self::safe_symbol(method),
             [] => Resolution::Unresolved(UnresolvedReason::MissingTarget),
@@ -156,16 +175,19 @@ impl<'a> RustIndex<'a> {
         if path.is_empty() {
             return Resolution::Unresolved(UnresolvedReason::DynamicTarget);
         }
+
         let mut module = match path[0] {
             "crate" => "crate".to_owned(),
             "self" | "super" => file.unit.module.clone(),
             _ => file.unit.module.clone(),
         };
+
         let mut index = match path[0] {
             "crate" | "self" => 1,
             "super" => 0,
             _ => 0,
         };
+
         while path.get(index) == Some(&"super") {
             if module == "crate" {
                 return Resolution::Unresolved(UnresolvedReason::UnknownModule);
@@ -176,9 +198,11 @@ impl<'a> RustIndex<'a> {
             module.truncate(parent.len());
             index += 1;
         }
+
         if index == path.len() {
             return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
         }
+
         for component in &path[index..path.len() - 1] {
             if self.module_files(&file.unit.target, &module).is_none() {
                 return Resolution::Unresolved(UnresolvedReason::ExternalTarget);
@@ -186,10 +210,12 @@ impl<'a> RustIndex<'a> {
             module.push_str("::");
             module.push_str(component);
         }
+
         if let Some(files) = self.module_files(&file.unit.target, &module) {
             if files.len() != 1 {
                 return Resolution::Unresolved(UnresolvedReason::AmbiguousTarget);
             }
+
             let result = self.module_function(&file.unit.target, &module, path[path.len() - 1]);
             if !matches!(
                 result,
@@ -198,12 +224,14 @@ impl<'a> RustIndex<'a> {
                 return result;
             }
         }
+
         // The last qualifier can be an inherent type, but never an inferred receiver.
         if path.len() - index >= 2 {
             let ty = path[path.len() - 2];
             let parent_module = module
                 .rsplit_once("::")
                 .and_then(|(parent, last)| (last == ty).then_some(parent));
+
             if let Some(parent_module) = parent_module {
                 return self.inherent_method(
                     &file.unit.target,
@@ -213,6 +241,7 @@ impl<'a> RustIndex<'a> {
                 );
             }
         }
+
         if self.module_files(&file.unit.target, &module).is_some() {
             Resolution::Unresolved(UnresolvedReason::MissingTarget)
         } else if index == 0
@@ -240,12 +269,15 @@ impl<'a> RustIndex<'a> {
         if import.conditional {
             return Resolution::Unresolved(UnresolvedReason::ConditionalCompilation);
         }
+
         if import.unknown_attribute {
             return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
         }
+
         if import.wildcard {
             return Resolution::Unresolved(UnresolvedReason::WildcardImport);
         }
+
         // A use declaration is an alias for one syntactic path, not evidence
         // about external crates, re-exports, glob members or runtime dispatch.
         let mut path: Vec<&str> = import
@@ -253,9 +285,11 @@ impl<'a> RustIndex<'a> {
             .split("::")
             .filter(|p| !p.is_empty())
             .collect();
+
         if let Some(name) = &import.name {
             path.push(name);
         }
+
         path.extend_from_slice(suffix);
         if path.is_empty() {
             return Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch);
@@ -267,9 +301,11 @@ impl<'a> RustIndex<'a> {
         if !file.valid {
             return Resolution::Unresolved(UnresolvedReason::ParseError);
         }
+
         if call.expression.trim_end().ends_with('!') {
             return Resolution::Unresolved(UnresolvedReason::MacroExpansion);
         }
+
         let path = match &call.target {
             CallTarget::Name(name) => vec![name.as_str()],
             CallTarget::Qualified(parts) => parts.iter().map(String::as_str).collect(),
@@ -278,21 +314,26 @@ impl<'a> RustIndex<'a> {
             }
             CallTarget::Dynamic => return Resolution::Unresolved(UnresolvedReason::DynamicTarget),
         };
+
         if path.is_empty() {
             return Resolution::Unresolved(UnresolvedReason::DynamicTarget);
         }
+
         if path
             .iter()
             .any(|part| part.is_empty() || part.contains('!'))
         {
             return Resolution::Unresolved(UnresolvedReason::MacroExpansion);
         }
+
         if matches!(path[0], "crate" | "self" | "super") {
             return self.absolute_path(file, &path);
         }
+
         let name = path[0];
         let mut scope = Some(call.scope_id);
         let mut wildcard = false;
+
         while let Some(id) = scope {
             let Some(current) = file.scopes.get(id) else {
                 return Resolution::Unresolved(UnresolvedReason::ParseError);
@@ -302,16 +343,20 @@ impl<'a> RustIndex<'a> {
                 scope = current.parent;
                 continue;
             }
+
             wildcard |= file.imports.iter().any(|i| i.scope_id == id && i.wildcard);
+
             let bindings: Vec<_> = file
                 .bindings
                 .iter()
                 .filter(|b| b.scope_id == id && b.name == name)
                 .collect();
+
             if !bindings.is_empty() {
                 if wildcard {
                     return Resolution::Unresolved(UnresolvedReason::WildcardImport);
                 }
+
                 if bindings.iter().any(|b| b.kind == BindingKind::Import) {
                     if bindings.len() != 1 || bindings[0].kind != BindingKind::Import {
                         return Resolution::Unresolved(UnresolvedReason::AmbiguousBinding);
@@ -329,15 +374,18 @@ impl<'a> RustIndex<'a> {
                                     == Some(name)
                         })
                         .collect();
+
                     return match imports.as_slice() {
                         [import] => self.import_target(file, import, &path[1..]),
                         [] => Resolution::Unresolved(UnresolvedReason::UnsupportedDispatch),
                         _ => Resolution::Unresolved(UnresolvedReason::AmbiguousBinding),
                     };
                 }
+
                 if bindings.iter().any(|b| b.kind != BindingKind::Definition) {
                     return Resolution::Unresolved(UnresolvedReason::Shadowed);
                 }
+
                 if path.len() == 1 {
                     let symbols: Vec<_> = file
                         .symbols
@@ -350,6 +398,7 @@ impl<'a> RustIndex<'a> {
                         _ => Resolution::Unresolved(UnresolvedReason::AmbiguousTarget),
                     };
                 }
+
                 // A module or type item is a namespace, not a callable
                 // function. Only syntactically proven inherent types dispatch.
                 if bindings.len() == 1
@@ -382,9 +431,11 @@ impl<'a> RustIndex<'a> {
             }
             scope = current.parent;
         }
+
         if wildcard {
             return Resolution::Unresolved(UnresolvedReason::WildcardImport);
         }
+
         if path.len() == 1 {
             return self.module_function(&file.unit.target, &file.unit.module, name);
         }
@@ -393,6 +444,7 @@ impl<'a> RustIndex<'a> {
         if path.len() == 2 {
             let type_resolution =
                 self.inherent_method(&file.unit.target, &file.unit.module, name, path[1]);
+
             if matches!(
                 type_resolution,
                 Resolution::Resolved(_)

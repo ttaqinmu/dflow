@@ -244,22 +244,27 @@ pub fn extract_snapshot(snapshot: &CapturedSnapshot) -> ExtractedSnapshot {
     let mut files = BTreeMap::new();
     let mut diagnostics = Vec::new();
     let mut complete = true;
+
     for adapter in crate::languages::adapters() {
         let discovery = adapter.discover(snapshot);
+        let mut covered = BTreeSet::new();
+
         complete &= !discovery.incomplete;
         diagnostics.extend(discovery.diagnostics);
-        let mut covered = BTreeSet::new();
+
         for unit in discovery.units {
             let Some(file) = snapshot.files.get(&unit.key.path) else {
                 complete = false;
                 continue;
             };
-            covered.insert(unit.key.path.clone());
+
             let parsed = adapter.extract(file, snapshot.role, &unit);
+            covered.insert(unit.key.path.clone());
             complete &= parsed.valid;
             diagnostics.extend(parsed.diagnostics.clone());
             files.insert(unit.key, parsed);
         }
+
         for path in snapshot.files.keys().filter(|path| {
             adapter.accepts_source(path)
                 && (include_test || !crate::languages::is_test_path(path))
@@ -275,6 +280,7 @@ pub fn extract_snapshot(snapshot: &CapturedSnapshot) -> ExtractedSnapshot {
             });
         }
     }
+
     ExtractedSnapshot {
         role: snapshot.role,
         files,
@@ -292,13 +298,17 @@ pub fn classify_symbols(base: &ExtractedSnapshot, target: &ExtractedSnapshot) ->
         .chain(target.files.keys())
         .cloned()
         .collect();
+
     for unit in units {
+        type Key = (LanguageId, String, String);
+
         let before = base.files.get(&unit);
         let after = target.files.get(&unit);
+
         if before.is_some_and(|f| !f.valid) || after.is_some_and(|f| !f.valid) {
             continue;
         }
-        type Key = (LanguageId, String, String);
+
         let group = |file: Option<&ParsedFile>| -> BTreeMap<Key, Vec<Symbol>> {
             let mut groups: BTreeMap<Key, Vec<Symbol>> = BTreeMap::new();
             if let Some(file) = file {
@@ -315,12 +325,15 @@ pub fn classify_symbols(base: &ExtractedSnapshot, target: &ExtractedSnapshot) ->
             }
             groups
         };
+
         let b = group(before);
         let a = group(after);
         let keys: BTreeSet<_> = b.keys().chain(a.keys()).cloned().collect();
+
         for key in keys {
             let bs = b.get(&key).map(Vec::as_slice).unwrap_or(&[]);
             let as_ = a.get(&key).map(Vec::as_slice).unwrap_or(&[]);
+
             if bs.len() > 1 || as_.len() > 1 {
                 diagnostics.push(Diagnostic {
                     kind: DiagnosticKind::DuplicateSymbol,
@@ -333,13 +346,16 @@ pub fn classify_symbols(base: &ExtractedSnapshot, target: &ExtractedSnapshot) ->
                     path: unit.path.clone(),
                     range: None,
                 });
+
                 if bs.len() > 1 && as_.len() > 1 && bs.len() == as_.len() {
                     let same_order = bs.iter().zip(as_).all(|(before, after)| {
                         before.fingerprint == after.fingerprint && before.kind == after.kind
                     });
+
                     if same_order {
                         continue;
                     }
+
                     for symbol in bs {
                         changes.push(SymbolChange {
                             kind: SymbolChangeKind::Deleted,
@@ -347,6 +363,7 @@ pub fn classify_symbols(base: &ExtractedSnapshot, target: &ExtractedSnapshot) ->
                             after: None,
                         });
                     }
+
                     for symbol in as_ {
                         changes.push(SymbolChange {
                             kind: SymbolChangeKind::Added,
@@ -356,8 +373,10 @@ pub fn classify_symbols(base: &ExtractedSnapshot, target: &ExtractedSnapshot) ->
                     }
                     continue;
                 }
+
                 let mut unmatched_after = as_.to_vec();
                 let mut unmatched_before = Vec::new();
+
                 for s in bs {
                     if let Some(index) = unmatched_after
                         .iter()
@@ -368,6 +387,7 @@ pub fn classify_symbols(base: &ExtractedSnapshot, target: &ExtractedSnapshot) ->
                         unmatched_before.push(s);
                     }
                 }
+
                 for s in unmatched_before {
                     changes.push(SymbolChange {
                         kind: SymbolChangeKind::Deleted,
@@ -375,6 +395,7 @@ pub fn classify_symbols(base: &ExtractedSnapshot, target: &ExtractedSnapshot) ->
                         after: None,
                     });
                 }
+
                 for s in unmatched_after {
                     changes.push(SymbolChange {
                         kind: SymbolChangeKind::Added,
@@ -384,6 +405,7 @@ pub fn classify_symbols(base: &ExtractedSnapshot, target: &ExtractedSnapshot) ->
                 }
                 continue;
             }
+
             match (bs.first(), as_.first()) {
                 (Some(b), Some(a)) if b.direct_fingerprint != a.direct_fingerprint => {
                     changes.push(SymbolChange {

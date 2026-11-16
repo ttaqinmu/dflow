@@ -17,6 +17,7 @@ struct Availability {
     conditional: bool,
     unknown_attribute: bool,
 }
+
 impl Availability {
     fn combine(self, other: Self) -> Self {
         Self {
@@ -32,6 +33,7 @@ struct Walker<'a> {
     parsed: ParsedFile,
     order: usize,
 }
+
 impl Walker<'_> {
     fn range(&self, node: Node<'_>) -> SourceRange {
         let start = node.start_position();
@@ -49,6 +51,7 @@ impl Walker<'_> {
             end_byte: node.end_byte(),
         }
     }
+
     fn source(&self, node: Node<'_>) -> SourceRef {
         SourceRef {
             snapshot: self.role,
@@ -56,22 +59,27 @@ impl Walker<'_> {
             range: self.range(node),
         }
     }
+
     fn text(&self, node: Node<'_>) -> &'_ str {
         // UTF-8 was checked before visiting the tree; node boundaries are byte offsets.
         std::str::from_utf8(&self.bytes[node.byte_range()]).expect("validated Rust UTF-8")
     }
+
     fn children<'a>(&self, node: Node<'a>) -> Vec<Node<'a>> {
         let mut cursor = node.walk();
         node.children(&mut cursor).collect()
     }
+
     fn named<'a>(&self, node: Node<'a>) -> Vec<Node<'a>> {
         let mut cursor = node.walk();
         node.named_children(&mut cursor).collect()
     }
+
     fn is_doc(&self, node: Node<'_>) -> bool {
         matches!(node.kind(), "line_comment" | "block_comment")
             && node.child_by_field_name("doc").is_some()
     }
+
     fn canonical(
         &self,
         node: Node<'_>,
@@ -83,6 +91,7 @@ impl Walker<'_> {
         if matches!(node.kind(), "line_comment" | "block_comment") && !self.is_doc(node) {
             return;
         }
+
         let in_body = in_body || body == Some(node.id());
         if mode != 0
             && in_body
@@ -95,13 +104,16 @@ impl Walker<'_> {
             }
             return;
         }
+
         if self.is_doc(node) {
             digest.push(node.kind().as_bytes());
             digest.push(&self.bytes[node.byte_range()]);
             return;
         }
+
         let mut cursor = node.walk();
         let mut children = node.children(&mut cursor);
+
         if let Some(first) = children.next() {
             digest.push(node.kind().as_bytes());
             for child in std::iter::once(first).chain(children) {
@@ -125,18 +137,21 @@ impl Walker<'_> {
             }
         }
     }
+
     fn availability(&self, attrs: &[Node<'_>]) -> Availability {
         let mut result = Availability::default();
         for attr in attrs {
             if !matches!(attr.kind(), "attribute_item" | "inner_attribute_item") {
                 continue;
             }
+
             let text = self.text(*attr);
             let key = text
                 .trim_start_matches(['#', '!', '[', ' '])
                 .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
                 .next()
                 .unwrap_or("");
+
             if matches!(key, "cfg" | "cfg_attr") {
                 result.conditional = true;
             } else if !matches!(
@@ -156,6 +171,7 @@ impl Walker<'_> {
         }
         result
     }
+
     fn add_binding(&mut self, scope: usize, name: &str, kind: BindingKind, node: Node<'_>) {
         self.order += 1;
         self.parsed.bindings.push(Binding {
@@ -168,6 +184,7 @@ impl Walker<'_> {
             unknown_attribute: false,
         });
     }
+
     fn pattern(&mut self, node: Node<'_>, scope: usize, kind: BindingKind) {
         match node.kind() {
             "identifier" | "shorthand_field_identifier" => {
@@ -182,6 +199,7 @@ impl Walker<'_> {
             }
         }
     }
+
     fn params(&mut self, parameters: Node<'_>, scope: usize) {
         for child in self.named(parameters) {
             match child.kind() {
@@ -199,6 +217,7 @@ impl Walker<'_> {
             }
         }
     }
+
     fn new_scope(&mut self, parent: usize, name: &str, kind: ScopeKind, node: Node<'_>) -> usize {
         let id = self.parsed.scopes.len();
         let qualified_name = format!("{}::{name}", self.parsed.scopes[parent].qualified_name);
@@ -212,6 +231,7 @@ impl Walker<'_> {
         });
         id
     }
+
     fn definition(
         &mut self,
         node: Node<'_>,
@@ -228,29 +248,35 @@ impl Walker<'_> {
             &self.parsed.scopes[parent].kind,
             ScopeKind::RustType | ScopeKind::RustTrait
         );
+
         let async_ = self.named(node).iter().any(|n| {
             n.kind() == "function_modifiers"
                 && self.text(*n).split_whitespace().any(|word| word == "async")
         });
+
         let kind = match (method, async_) {
             (true, true) => SymbolKind::AsyncMethod,
             (true, false) => SymbolKind::Method,
             (false, true) => SymbolKind::AsyncFunction,
             (false, false) => SymbolKind::Function,
         };
+
         let body = node.child_by_field_name("body").map(|n| n.id());
         let mut full = FingerprintBuilder::new();
         let mut direct = FingerprintBuilder::new();
         let mut non_call = FingerprintBuilder::new();
+
         for attr in attrs {
             self.canonical(*attr, &mut full, 0, body, false);
             self.canonical(*attr, &mut direct, 1, body, false);
             self.canonical(*attr, &mut non_call, 2, body, false);
         }
+
         self.canonical(node, &mut full, 0, body, false);
         self.canonical(node, &mut direct, 1, body, false);
         self.canonical(node, &mut non_call, 2, body, false);
         let availability = inherited.combine(self.availability(attrs));
+
         self.parsed.symbols.push(Symbol {
             unit: self.parsed.unit.clone(),
             language: LanguageId::Rust,
@@ -268,14 +294,17 @@ impl Walker<'_> {
             conditional: availability.conditional,
             unknown_attribute: availability.unknown_attribute,
         });
+
         self.add_binding(parent, &name, BindingKind::Definition, name_node);
         if let Some(params) = node.child_by_field_name("parameters") {
             self.params(params, scope);
         }
+
         if let Some(body) = node.child_by_field_name("body") {
             self.visit(body, scope, availability);
         }
     }
+
     fn import_leaf(
         &mut self,
         node: Node<'_>,
@@ -336,6 +365,7 @@ impl Walker<'_> {
             _ => {}
         }
     }
+
     fn import_path(
         &mut self,
         path: &str,
@@ -350,6 +380,7 @@ impl Walker<'_> {
         } else {
             format!("{prefix}::{path}")
         };
+
         let (module, name) = full.rsplit_once("::").unwrap_or(("", full.as_str()));
         // `use foo::{self}` imports foo under its own name.
         let (module, name) = if name == "self" && !module.is_empty() {
@@ -357,6 +388,7 @@ impl Walker<'_> {
         } else {
             (module, name)
         };
+
         let binding = alias.unwrap_or(name);
         self.parsed.imports.push(ImportBinding {
             scope_id: scope,
@@ -371,6 +403,7 @@ impl Walker<'_> {
         });
         self.add_binding(scope, binding, BindingKind::Import, node);
     }
+
     fn target(&self, node: Node<'_>) -> CallTarget {
         match node.kind() {
             "identifier" | "self" => CallTarget::Name(self.text(node).to_owned()),
@@ -391,15 +424,18 @@ impl Walker<'_> {
             _ => CallTarget::Dynamic,
         }
     }
+
     fn call(&mut self, node: Node<'_>, scope: usize) {
         let function = node.child_by_field_name("function");
         let target = function
             .map(|f| self.target(f))
             .unwrap_or(CallTarget::Dynamic);
+
         let expression = function
             .map(|f| self.text(f))
             .unwrap_or_else(|| self.text(node))
             .to_owned();
+
         self.parsed.calls.push(ExtractedCallSite {
             scope_id: scope,
             expression,
@@ -407,11 +443,13 @@ impl Walker<'_> {
             source: self.source(node),
         });
     }
+
     fn macro_call(&mut self, node: Node<'_>, scope: usize) {
         let expression = node
             .child_by_field_name("macro")
             .map(|n| format!("{}!", self.text(n)))
             .unwrap_or_else(|| format!("{}!", self.text(node)));
+
         self.parsed.calls.push(ExtractedCallSite {
             scope_id: scope,
             expression,
@@ -420,6 +458,7 @@ impl Walker<'_> {
         });
         // Token trees are opaque: never infer a definition or call from macro input.
     }
+
     fn visit_children(&mut self, node: Node<'_>, scope: usize, inherited: Availability) {
         let mut prefix = Vec::new();
         for child in self.named(node) {
@@ -433,6 +472,7 @@ impl Walker<'_> {
             prefix.clear();
         }
     }
+
     fn visit_item(
         &mut self,
         node: Node<'_>,
@@ -447,6 +487,7 @@ impl Walker<'_> {
         {
             return;
         }
+
         let availability = inherited.combine(self.availability(attrs));
         match node.kind() {
             "function_item" | "function_signature_item" => {
@@ -507,6 +548,7 @@ impl Walker<'_> {
             _ => self.visit(node, scope, availability),
         }
     }
+
     fn visit(&mut self, node: Node<'_>, scope: usize, inherited: Availability) {
         match node.kind() {
             "source_file" | "declaration_list" | "block" => {
@@ -563,6 +605,7 @@ impl Walker<'_> {
             }
         }
     }
+
     fn errors(&mut self, node: Node<'_>) {
         if node.is_error() || node.is_missing() {
             self.parsed.valid = false;
@@ -574,12 +617,14 @@ impl Walker<'_> {
                 range: Some(self.range(node)),
             });
         }
+
         let mut attrs = Vec::new();
         for child in self.children(node) {
             if matches!(child.kind(), "attribute_item" | "inner_attribute_item") {
                 attrs.push(child);
                 continue;
             }
+
             if !crate::config::Config::current().include_test
                 && attrs
                     .iter()
@@ -588,6 +633,7 @@ impl Walker<'_> {
                 attrs.clear();
                 continue;
             }
+
             if child.is_named() && !self.is_doc(child) {
                 attrs.clear();
             }
@@ -600,12 +646,15 @@ impl LanguageAdapter for RustAdapter {
     fn accepts_source(&self, path: &[u8]) -> bool {
         path.ends_with(b".rs")
     }
+
     fn accepts_metadata(&self, path: &[u8]) -> bool {
         path == b"Cargo.toml" || path.ends_with(b"/Cargo.toml")
     }
+
     fn discover(&self, snapshot: &CapturedSnapshot) -> Discovery {
         discover::discover(snapshot)
     }
+
     fn extract(
         &self,
         file: &CapturedFile,
@@ -626,9 +675,11 @@ impl LanguageAdapter for RustAdapter {
             calls: Vec::new(),
             diagnostics: Vec::new(),
         };
+
         if !include_test && is_test_path(&file.path) {
             return parsed;
         }
+
         let bytes = &file.bytes;
         if std::str::from_utf8(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)).is_err() {
             parsed.valid = false;
@@ -641,6 +692,7 @@ impl LanguageAdapter for RustAdapter {
             });
             return parsed;
         }
+
         let mut parser = Parser::new();
         if let Err(error) = parser.set_language(&tree_sitter_rust::LANGUAGE.into()) {
             parsed.valid = false;
@@ -653,6 +705,7 @@ impl LanguageAdapter for RustAdapter {
             });
             return parsed;
         }
+
         let Some(tree) = parser.parse(bytes, None) else {
             parsed.valid = false;
             parsed.diagnostics.push(Diagnostic {
@@ -664,6 +717,7 @@ impl LanguageAdapter for RustAdapter {
             });
             return parsed;
         };
+
         let root = tree.root_node();
         let selected = if let Some((start, end)) = unit.subtree {
             fn find(node: Node<'_>, start: usize, end: usize) -> Option<Node<'_>> {
@@ -688,6 +742,7 @@ impl LanguageAdapter for RustAdapter {
         } else {
             Some(root)
         };
+
         let Some(selected) = selected else {
             parsed.valid = false;
             parsed.diagnostics.push(Diagnostic {
@@ -699,6 +754,7 @@ impl LanguageAdapter for RustAdapter {
             });
             return parsed;
         };
+
         let module = unit.module.as_deref().unwrap_or(&unit.key.module);
         let qualified_name = format!("{}::{module}", unit.key.target);
         parsed.scopes.push(Scope {
@@ -724,12 +780,14 @@ impl LanguageAdapter for RustAdapter {
                 },
             },
         });
+
         let mut walker = Walker {
             bytes,
             role,
             parsed,
             order: 0,
         };
+
         walker.errors(selected);
         if include_test && selected.has_error() && walker.parsed.diagnostics.is_empty() {
             walker.parsed.valid = false;
@@ -741,6 +799,7 @@ impl LanguageAdapter for RustAdapter {
                 range: Some(walker.range(selected)),
             });
         }
+
         walker.visit(
             selected,
             0,

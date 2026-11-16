@@ -12,17 +12,17 @@ pub trait LanguageAdapter {
     fn extract(&self, file: &CapturedFile, role: SnapshotRole, unit: &DiscoveredUnit)
     -> ParsedFile;
 }
+
 pub(crate) fn adapters() -> Vec<Box<dyn LanguageAdapter>> {
     vec![Box::new(python::PythonAdapter), Box::new(rust::RustAdapter)]
 }
-/// Source and static metadata paths needed by registered language adapters.
+
 pub fn capture_path(path: &[u8]) -> bool {
     adapters()
         .iter()
         .any(|adapter| adapter.accepts_source(path) || adapter.accepts_metadata(path))
 }
 
-/// Conventional test-only paths in either supported language.
 pub fn is_test_path(path: &[u8]) -> bool {
     if path
         .split(|byte| *byte == b'/')
@@ -53,15 +53,18 @@ pub enum UnresolvedReason {
     ConditionalCompilation,
     MacroExpansion,
 }
+
 #[derive(Debug, Clone)]
 pub enum Resolution<'a> {
     Resolved(&'a crate::analysis::Symbol),
     Unresolved(UnresolvedReason),
 }
+
 pub struct ResolverRegistry<'a> {
     python: python::resolve::PythonIndex<'a>,
     rust: rust::resolve::RustIndex<'a>,
 }
+
 impl<'a> ResolverRegistry<'a> {
     pub fn new(snapshot: &'a crate::analysis::ExtractedSnapshot) -> Self {
         Self {
@@ -69,6 +72,7 @@ impl<'a> ResolverRegistry<'a> {
             rust: rust::resolve::RustIndex::new(snapshot),
         }
     }
+
     pub fn resolve(
         &self,
         file: &'a crate::analysis::ParsedFile,

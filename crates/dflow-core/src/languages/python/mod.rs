@@ -16,15 +16,18 @@ fn configured_source_root(snapshot: &CapturedSnapshot) -> Option<Result<&'static
         Ok(source) => source,
         Err(_) => return Some(Err(())),
     };
+
     let value: toml::Value = match source.parse() {
         Ok(value) => value,
         Err(_) => return Some(Err(())),
     };
+
     let setuptools = value.get("tool").and_then(|v| v.get("setuptools"))?;
     let package_dir = setuptools.get("package-dir")?;
     let Some(root) = package_dir.get("").and_then(toml::Value::as_str) else {
         return Some(Err(()));
     };
+
     match root.trim_end_matches('/') {
         "" | "." => Some(Ok(b"")),
         "src" => Some(Ok(b"src/")),
@@ -40,13 +43,16 @@ fn python_module_candidates(
     if !path.ends_with(b".py") {
         return Vec::new();
     }
+
     let mut candidates = Vec::new();
     let configured = configured_source_root(snapshot);
+
     for candidate in prefixes {
         let prefix = candidate.as_slice();
         if matches!(configured, Some(Err(()))) {
             return Vec::new();
         }
+
         if let Some(Ok(root)) = configured {
             if path.starts_with(b"src/") && root != prefix {
                 continue;
@@ -55,18 +61,23 @@ fn python_module_candidates(
                 continue;
             }
         }
+
         let Some(rest) = path.strip_prefix(prefix) else {
             continue;
         };
+
         let Ok(rest) = std::str::from_utf8(rest) else {
             continue;
         };
+
         let segments: Vec<_> = rest.split('/').collect();
         if segments.is_empty() {
             continue;
         }
+
         let mut parent = prefix.to_vec();
         let mut valid = true;
+
         for segment in &segments[..segments.len() - 1] {
             parent.extend_from_slice(segment.as_bytes());
             parent.extend_from_slice(b"/__init__.py");
@@ -76,17 +87,21 @@ fn python_module_candidates(
             }
             parent.truncate(parent.len() - b"__init__.py".len());
         }
+
         if !valid {
             continue;
         }
+
         let stem = segments.last().unwrap().strip_suffix(".py").unwrap_or("");
         let mut names: Vec<_> = segments[..segments.len() - 1]
             .iter()
             .map(|s| s.to_string())
             .collect();
+
         if stem != "__init__" {
             names.push(stem.to_string());
         }
+
         if names
             .iter()
             .all(|s| !s.is_empty() && s.chars().all(|c| c == '_' || c.is_alphanumeric()))
@@ -94,6 +109,7 @@ fn python_module_candidates(
             candidates.push(names.join("."));
         }
     }
+
     candidates.sort();
     candidates.dedup();
     candidates
@@ -109,6 +125,7 @@ struct Walker<'a> {
     property_reads: Vec<(usize, String, String, SourceRef)>,
     typed_parameters: Vec<(usize, String, String)>,
 }
+
 impl Walker<'_> {
     fn range(&self, node: Node<'_>) -> SourceRange {
         let start = node.start_position();
@@ -126,6 +143,7 @@ impl Walker<'_> {
             end_byte: node.end_byte(),
         }
     }
+
     fn source(&self, node: Node<'_>) -> SourceRef {
         SourceRef {
             snapshot: self.role,
@@ -133,26 +151,32 @@ impl Walker<'_> {
             range: self.range(node),
         }
     }
+
     fn text(&self, node: Node<'_>) -> String {
         String::from_utf8_lossy(&self.bytes[node.byte_range()]).into_owned()
     }
+
     fn named_children<'a>(&self, node: Node<'a>) -> Vec<Node<'a>> {
         let mut cursor = node.walk();
         node.named_children(&mut cursor).collect()
     }
+
     fn all_children<'a>(&self, node: Node<'a>) -> Vec<Node<'a>> {
         let mut cursor = node.walk();
         node.children(&mut cursor).collect()
     }
+
     fn is_excluded_definition(&self, node: Node<'_>) -> bool {
         if crate::config::Config::current().include_test {
             return false;
         }
+
         let inner = if node.kind() == "decorated_definition" {
             node.child_by_field_name("definition")
         } else {
             Some(node)
         };
+
         inner.is_some_and(|inner| {
             let prefix = match inner.kind() {
                 "function_definition" => b"test_".as_slice(),
@@ -164,6 +188,7 @@ impl Walker<'_> {
                 .is_some_and(|name| self.bytes[name.byte_range()].starts_with(prefix))
         })
     }
+
     fn canonical(
         &self,
         node: Node<'_>,
@@ -175,9 +200,11 @@ impl Walker<'_> {
         if self.is_excluded_definition(node) {
             return;
         }
+
         if node.kind() == "comment" {
             return;
         }
+
         let in_body = in_body || body == Some(node.id());
         if mode != 0 && in_body {
             let nested = if node.kind() == "decorated_definition" {
@@ -185,6 +212,7 @@ impl Walker<'_> {
             } else {
                 Some(node)
             };
+
             if let Some(def) = nested.filter(|n| n.kind() == "function_definition") {
                 digest.push(b"nested_function");
                 digest.push(def.kind().as_bytes());
@@ -194,8 +222,10 @@ impl Walker<'_> {
                 return;
             }
         }
+
         let mut cursor = node.walk();
         let mut children = node.children(&mut cursor);
+
         if let Some(first) = children.next() {
             digest.push(node.kind().as_bytes());
             for child in std::iter::once(first).chain(children) {
@@ -219,6 +249,7 @@ impl Walker<'_> {
             }
         }
     }
+
     fn add_binding(&mut self, scope_id: usize, name: String, kind: BindingKind, node: Node<'_>) {
         self.order += 1;
         self.parsed.bindings.push(Binding {
@@ -231,11 +262,13 @@ impl Walker<'_> {
             unknown_attribute: false,
         });
     }
+
     fn collect_names(&self, node: Node<'_>, names: &mut Vec<String>) {
         if node.kind() == "identifier" {
             names.push(self.text(node));
             return;
         }
+
         if matches!(
             node.kind(),
             "pattern"
@@ -253,13 +286,16 @@ impl Walker<'_> {
             }
         }
     }
+
     fn add_assignments(&mut self, node: Node<'_>, scope_id: usize) {
         if let Some(left) = node.child_by_field_name("left") {
             let mut names = Vec::new();
             self.collect_names(left, &mut names);
+
             for name in names {
                 self.add_binding(scope_id, name, BindingKind::Assignment, left);
             }
+
             if node.kind() == "assignment" && left.kind() == "identifier" {
                 if let Some(right) = node.child_by_field_name("right")
                     && right.kind() == "call"
@@ -276,6 +312,7 @@ impl Walker<'_> {
             }
         }
     }
+
     fn add_parameters(&mut self, node: Node<'_>, scope_id: usize) {
         if let Some(parameters) = node.child_by_field_name("parameters") {
             for param in self.named_children(parameters) {
@@ -286,6 +323,7 @@ impl Walker<'_> {
                         .into_iter()
                         .find(|c| c.kind() == "identifier")
                 };
+
                 if let Some(name) = name {
                     self.add_binding(scope_id, self.text(name), BindingKind::Parameter, name);
                     if let Some(annotation) = param.child_by_field_name("type") {
@@ -296,6 +334,7 @@ impl Walker<'_> {
                             .and_then(|inner| inner.strip_suffix(']'))
                             .unwrap_or(text)
                             .trim();
+
                         let class = class
                             .strip_prefix('"')
                             .and_then(|inner| inner.strip_suffix('"'))
@@ -305,6 +344,7 @@ impl Walker<'_> {
                                     .and_then(|inner| inner.strip_suffix('\''))
                             })
                             .unwrap_or(class);
+
                         if !class.is_empty()
                             && class
                                 .bytes()
@@ -321,6 +361,7 @@ impl Walker<'_> {
             }
         }
     }
+
     fn add_imports(&mut self, node: Node<'_>, scope_id: usize) {
         let from = node.kind() == "import_from_statement";
         let (module, level) = if from {
@@ -333,6 +374,7 @@ impl Walker<'_> {
         } else {
             (String::new(), 0)
         };
+
         for item in self.named_children(node) {
             if !matches!(
                 item.kind(),
@@ -344,6 +386,7 @@ impl Walker<'_> {
             {
                 continue;
             }
+
             let wildcard = item.kind() == "wildcard_import";
             let (original, alias) = if item.kind() == "aliased_import" {
                 let Some(name) = item.child_by_field_name("name") else {
@@ -356,6 +399,7 @@ impl Walker<'_> {
             } else {
                 (self.text(item), None)
             };
+
             let binding_name = alias.clone().unwrap_or_else(|| {
                 if from {
                     original.clone()
@@ -363,6 +407,7 @@ impl Walker<'_> {
                     original.split('.').next().unwrap_or(&original).to_string()
                 }
             });
+
             self.parsed.imports.push(ImportBinding {
                 scope_id,
                 module: if from {
@@ -382,23 +427,27 @@ impl Walker<'_> {
                 unknown_attribute: false,
                 source: self.source(node),
             });
+
             if !wildcard {
                 self.add_binding(scope_id, binding_name, BindingKind::Import, node);
             }
         }
     }
+
     fn add_directive(&mut self, node: Node<'_>, scope_id: usize) {
         let kind = if node.kind() == "global_statement" {
             BindingKind::Global
         } else {
             BindingKind::Nonlocal
         };
+
         for child in self.named_children(node) {
             if child.kind() == "identifier" {
                 self.add_binding(scope_id, self.text(child), kind.clone(), child);
             }
         }
     }
+
     fn call_target(&self, node: Node<'_>) -> CallTarget {
         match node.kind() {
             "identifier" => CallTarget::Name(self.text(node)),
@@ -406,9 +455,11 @@ impl Walker<'_> {
                 let Some(object) = node.child_by_field_name("object") else {
                     return CallTarget::Dynamic;
                 };
+
                 let Some(attribute) = node.child_by_field_name("attribute") else {
                     return CallTarget::Dynamic;
                 };
+
                 match self.call_target(object) {
                     CallTarget::Name(root) => {
                         CallTarget::Qualified(vec![root, self.text(attribute)])
@@ -425,6 +476,7 @@ impl Walker<'_> {
             _ => CallTarget::Dynamic,
         }
     }
+
     fn add_call(&mut self, node: Node<'_>, scope_id: usize) {
         let function = node.child_by_field_name("function");
         let expression = function
@@ -440,10 +492,12 @@ impl Walker<'_> {
             source: self.source(node),
         });
     }
+
     fn definition(&mut self, outer: Node<'_>, inner: Node<'_>, parent: usize) {
         if self.is_excluded_definition(inner) {
             return;
         }
+
         let Some(name_node) = inner.child_by_field_name("name") else {
             return;
         };
@@ -454,11 +508,13 @@ impl Walker<'_> {
         } else {
             format!("{parent_name}.{name}")
         };
+
         let kind = if inner.kind() == "class_definition" {
             ScopeKind::Class
         } else {
             ScopeKind::Function
         };
+
         let scope_id = self.parsed.scopes.len();
         self.parsed.scopes.push(Scope {
             id: scope_id,
@@ -468,6 +524,7 @@ impl Walker<'_> {
             kind: kind.clone(),
             source: self.source(outer),
         });
+
         self.add_binding(parent, name.clone(), BindingKind::Definition, name_node);
         if kind == ScopeKind::Function {
             let method = self.parsed.scopes[parent].kind == ScopeKind::Class;
@@ -478,10 +535,12 @@ impl Walker<'_> {
                 (true, false) => SymbolKind::Method,
                 (true, true) => SymbolKind::AsyncMethod,
             };
+
             let body = inner.child_by_field_name("body").map(|n| n.id());
             let mut full = FingerprintBuilder::new();
             let mut direct = FingerprintBuilder::new();
             let mut non_call = FingerprintBuilder::new();
+
             self.canonical(outer, &mut full, 0, body, false);
             self.canonical(outer, &mut direct, 1, body, false);
             self.canonical(outer, &mut non_call, 2, body, false);
@@ -514,6 +573,7 @@ impl Walker<'_> {
                 unknown_attribute: false,
             });
         }
+
         // Decorators, class superclasses, and parameter defaults execute in the enclosing scope.
         if outer.id() != inner.id() {
             for child in self.named_children(outer) {
@@ -522,6 +582,7 @@ impl Walker<'_> {
                 }
             }
         }
+
         for child in self.named_children(inner) {
             if child.kind() == "block" {
                 self.visit(child, scope_id);
@@ -533,6 +594,7 @@ impl Walker<'_> {
             }
         }
     }
+
     fn visit(&mut self, node: Node<'_>, scope_id: usize) {
         match node.kind() {
             "decorated_definition" => {
@@ -623,6 +685,7 @@ impl Walker<'_> {
                     kind: ScopeKind::Comprehension,
                     source: self.source(node),
                 });
+
                 for child in self.named_children(node) {
                     self.visit(child, id);
                 }
@@ -659,10 +722,12 @@ impl Walker<'_> {
             }
         }
     }
+
     fn errors(&mut self, node: Node<'_>) {
         if self.is_excluded_definition(node) {
             return;
         }
+
         if node.is_error() || node.is_missing() {
             self.parsed.diagnostics.push(Diagnostic {
                 kind: DiagnosticKind::ParseError,
@@ -672,6 +737,7 @@ impl Walker<'_> {
                 range: Some(self.range(node)),
             });
         }
+
         for child in self.all_children(node) {
             self.errors(child);
         }
@@ -685,13 +751,16 @@ fn mask_invalid_tests(bytes: &[u8]) -> Option<Vec<u8>> {
     let mut offset = 0;
     let mut excluded_indent = None;
     let mut decorators = Vec::new();
+
     for line in bytes.split_inclusive(|byte| *byte == b'\n') {
         let indent = line
             .iter()
             .take_while(|&&byte| byte == b' ' || byte == b'\t')
             .count();
+
         let content = &line[indent..];
         let blank = content.iter().all(u8::is_ascii_whitespace);
+
         if let Some(level) = excluded_indent {
             if blank || indent > level {
                 let output = masked.get_or_insert_with(|| bytes.to_vec());
@@ -705,6 +774,7 @@ fn mask_invalid_tests(bytes: &[u8]) -> Option<Vec<u8>> {
             }
             excluded_indent = None;
         }
+
         if content.starts_with(b"@") {
             decorators.push((offset, line.len(), indent));
         } else if content.starts_with(b"def test_")
@@ -721,6 +791,7 @@ fn mask_invalid_tests(bytes: &[u8]) -> Option<Vec<u8>> {
                     }
                 }
             }
+
             for byte in &mut output[offset..offset + line.len()] {
                 if *byte != b'\n' && *byte != b'\r' {
                     *byte = b' ';
@@ -735,17 +806,21 @@ fn mask_invalid_tests(bytes: &[u8]) -> Option<Vec<u8>> {
     }
     masked
 }
+
 impl LanguageAdapter for PythonAdapter {
     fn accepts_source(&self, path: &[u8]) -> bool {
         path.ends_with(b".py")
     }
+
     fn accepts_metadata(&self, path: &[u8]) -> bool {
         path == b"pyproject.toml" || path.ends_with(b"/pyproject.toml")
     }
+
     fn discover(&self, snapshot: &CapturedSnapshot) -> Discovery {
         let include_test = crate::config::Config::current().include_test;
         let mut discovery = Discovery::default();
         let mut prefixes = vec![Vec::new(), b"src/".to_vec()];
+
         for path in snapshot.files.keys() {
             if let Some(prefix) = path.strip_suffix(b"pyproject.toml")
                 && !prefix.is_empty()
@@ -754,11 +829,13 @@ impl LanguageAdapter for PythonAdapter {
                 prefixes.push(prefix.to_vec());
             }
         }
+
         for path in snapshot.files.keys().filter(|path| {
             self.accepts_source(path) && (include_test || !crate::languages::is_test_path(path))
         }) {
             let modules = python_module_candidates(snapshot, path, &prefixes);
             let module = (modules.len() == 1).then(|| modules[0].clone());
+
             if modules.len() > 1 {
                 discovery.diagnostics.push(Diagnostic {
                     kind: DiagnosticKind::ModuleAmbiguity,
@@ -776,6 +853,7 @@ impl LanguageAdapter for PythonAdapter {
                     range: None,
                 });
             }
+
             discovery.units.push(DiscoveredUnit {
                 key: SourceUnitKey::python(path),
                 module,
@@ -786,6 +864,7 @@ impl LanguageAdapter for PythonAdapter {
         }
         discovery
     }
+
     fn extract(
         &self,
         file: &CapturedFile,
@@ -806,9 +885,11 @@ impl LanguageAdapter for PythonAdapter {
             calls: Vec::new(),
             diagnostics: Vec::new(),
         };
+
         if !include_test && crate::languages::is_test_path(&file.path) {
             return parsed;
         }
+
         let bytes = &file.bytes;
         if std::str::from_utf8(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)).is_err() {
             parsed.valid = false;
@@ -821,6 +902,7 @@ impl LanguageAdapter for PythonAdapter {
             });
             return parsed;
         }
+
         let mut parser = Parser::new();
         if let Err(error) = parser.set_language(&tree_sitter_python::LANGUAGE.into()) {
             parsed.valid = false;
@@ -833,6 +915,7 @@ impl LanguageAdapter for PythonAdapter {
             });
             return parsed;
         }
+
         let Some(tree) = parser.parse(bytes, None) else {
             parsed.valid = false;
             parsed.diagnostics.push(Diagnostic {
@@ -844,17 +927,21 @@ impl LanguageAdapter for PythonAdapter {
             });
             return parsed;
         };
+
         let masked = if !include_test && tree.root_node().has_error() {
             mask_invalid_tests(bytes)
         } else {
             None
         };
+
         let tree = masked
             .as_ref()
             .and_then(|masked| parser.parse(masked, None))
             .unwrap_or(tree);
+
         let bytes = masked.as_deref().unwrap_or(bytes);
         let root = tree.root_node();
+
         parsed.scopes.push(Scope {
             id: 0,
             parent: None,
@@ -878,6 +965,7 @@ impl LanguageAdapter for PythonAdapter {
                 },
             },
         });
+
         let mut walker = Walker {
             bytes,
             path: file.path.clone(),
@@ -888,8 +976,10 @@ impl LanguageAdapter for PythonAdapter {
             property_reads: Vec::new(),
             typed_parameters: Vec::new(),
         };
+
         walker.errors(root);
         walker.parsed.valid = walker.parsed.diagnostics.is_empty();
+
         if include_test && root.has_error() && walker.parsed.diagnostics.is_empty() {
             walker.parsed.valid = false;
             walker.parsed.diagnostics.push(Diagnostic {
@@ -900,17 +990,21 @@ impl LanguageAdapter for PythonAdapter {
                 range: Some(walker.range(root)),
             });
         }
+
         walker.visit(root, 0);
         for call in &mut walker.parsed.calls {
             let CallTarget::Qualified(parts) = &call.target else {
                 continue;
             };
+
             if parts.len() != 2 {
                 continue;
             }
+
             let receiver = &parts[0];
             let mut scope = Some(call.scope_id);
             let mut constructor = None;
+
             while let Some(id) = scope {
                 let mut bindings = walker
                     .parsed
@@ -929,6 +1023,7 @@ impl LanguageAdapter for PythonAdapter {
                 }
                 scope = walker.parsed.scopes[id].parent;
             }
+
             if let Some(constructor) = constructor {
                 call.target = CallTarget::TypedMethod {
                     constructor,
@@ -936,12 +1031,14 @@ impl LanguageAdapter for PythonAdapter {
                 };
             }
         }
+
         for (scope_id, receiver, name, source) in &walker.property_reads {
             let mut bindings = walker
                 .parsed
                 .bindings
                 .iter()
                 .filter(|binding| binding.scope_id == *scope_id && binding.name == *receiver);
+
             if !bindings
                 .next()
                 .is_some_and(|binding| binding.kind == BindingKind::Assignment)
@@ -949,6 +1046,7 @@ impl LanguageAdapter for PythonAdapter {
             {
                 continue;
             }
+
             let Some((_, _, constructor, start)) = walker
                 .instances
                 .iter()
@@ -956,9 +1054,11 @@ impl LanguageAdapter for PythonAdapter {
             else {
                 continue;
             };
+
             if *start >= source.range.start_byte {
                 continue;
             }
+
             walker.parsed.calls.push(ExtractedCallSite {
                 scope_id: *scope_id,
                 expression: format!("{receiver}.{name}"),

@@ -10,10 +10,12 @@ fn relative_path(base: &[u8], path: &str) -> Option<Vec<u8>> {
     if path.is_empty() || path.starts_with('/') || path.contains('\\') {
         return None;
     }
+
     let mut parts: Vec<&[u8]> = base
         .split(|&c| c == b'/')
         .filter(|p| !p.is_empty())
         .collect();
+
     for part in path.split('/') {
         match part {
             "" | "." => {}
@@ -134,6 +136,7 @@ impl Finder<'_> {
             );
             return None;
         };
+
         let Ok(text) = source(file) else {
             self.issue(
                 DiagnosticKind::InvalidEncoding,
@@ -142,6 +145,7 @@ impl Finder<'_> {
             );
             return None;
         };
+
         match text.parse() {
             Ok(value) => Some(value),
             Err(err) => {
@@ -159,6 +163,7 @@ impl Finder<'_> {
         let Some(package) = value.get("package") else {
             return;
         };
+
         let Some(package) = package.as_table() else {
             self.issue(
                 DiagnosticKind::UnsupportedLayout,
@@ -167,6 +172,7 @@ impl Finder<'_> {
             );
             return;
         };
+
         let Some(package_name) = package
             .get("name")
             .and_then(toml::Value::as_str)
@@ -179,9 +185,11 @@ impl Finder<'_> {
             );
             return;
         };
+
         let base = parent(manifest_path);
         let package_name = package_name.replace('-', "_");
         let mut targets: Vec<(String, Vec<u8>, bool)> = Vec::new();
+
         if let Some(lib) = value.get("lib") {
             if let Some(lib) = lib.as_table() {
                 let name = match lib.get("name") {
@@ -216,6 +224,7 @@ impl Finder<'_> {
         {
             targets.push((format!("lib:{package_name}"), b"src/lib.rs".to_vec(), false));
         }
+
         let bins = match value.get("bin") {
             Some(v) => match v.as_array() {
                 Some(bins) => bins.as_slice(),
@@ -230,6 +239,7 @@ impl Finder<'_> {
             },
             None => &[],
         };
+
         let mut explicit_main = false;
         for bin in bins {
             let Some(bin) = bin.as_table() else {
@@ -240,12 +250,14 @@ impl Finder<'_> {
                 );
                 continue;
             };
+
             let path = bin.get("path").and_then(toml::Value::as_str);
             let name = bin
                 .get("name")
                 .and_then(toml::Value::as_str)
                 .filter(|n| !n.is_empty())
                 .or_else(|| path.and_then(|p| p.rsplit('/').next()?.strip_suffix(".rs")));
+
             let Some(name) = name else {
                 self.issue(
                     DiagnosticKind::UnsupportedLayout,
@@ -254,17 +266,20 @@ impl Finder<'_> {
                 );
                 continue;
             };
+
             let default = format!("src/bin/{name}.rs");
             let selected = match path {
                 Some(p) => p,
                 None if name == package_name => "src/main.rs",
                 None => &default,
             };
+
             if selected == "src/main.rs" {
                 explicit_main = true;
             }
             targets.push((format!("bin:{name}"), selected.as_bytes().to_vec(), true));
         }
+
         if !explicit_main
             && self
                 .snapshot
@@ -283,6 +298,7 @@ impl Finder<'_> {
                 ));
             }
         }
+
         if crate::config::Config::current().include_test {
             if let Some(declarations) = value.get("test") {
                 if let Some(declarations) = declarations.as_array() {
@@ -295,6 +311,7 @@ impl Finder<'_> {
                             );
                             continue;
                         };
+
                         let path = declaration.get("path").and_then(toml::Value::as_str);
                         let name = declaration
                             .get("name")
@@ -303,6 +320,7 @@ impl Finder<'_> {
                             .or_else(|| {
                                 path.and_then(|path| path.rsplit('/').next()?.strip_suffix(".rs"))
                             });
+
                         let Some(name) = name else {
                             self.issue(
                                 DiagnosticKind::UnsupportedLayout,
@@ -311,6 +329,7 @@ impl Finder<'_> {
                             );
                             continue;
                         };
+
                         let default = format!("tests/{name}.rs");
                         targets.push((
                             format!("test:{name}"),
@@ -326,6 +345,7 @@ impl Finder<'_> {
                     );
                 }
             }
+
             if package.get("autotests").and_then(toml::Value::as_bool) != Some(false) {
                 let tests_dir = append(base, "tests");
                 for path in self.snapshot.files.keys() {
@@ -335,6 +355,7 @@ impl Finder<'_> {
                     else {
                         continue;
                     };
+
                     let name = if !relative.contains(&b'/') {
                         relative.strip_suffix(b".rs")
                     } else {
@@ -342,9 +363,11 @@ impl Finder<'_> {
                             .strip_suffix(b"/main.rs")
                             .filter(|name| !name.contains(&b'/'))
                     };
+
                     let Some(name) = name.and_then(|name| std::str::from_utf8(name).ok()) else {
                         continue;
                     };
+
                     let target = format!("test:{name}");
                     if !targets.iter().any(|(existing, _, _)| *existing == target) {
                         let relative_path = path.strip_prefix(base).expect("captured package path");
@@ -355,6 +378,7 @@ impl Finder<'_> {
                 }
             }
         }
+
         let mut identities = BTreeSet::new();
         for (kind_name, path, explicit) in targets {
             if !identities.insert(kind_name.clone()) {
@@ -365,6 +389,7 @@ impl Finder<'_> {
                 );
                 continue;
             }
+
             let Ok(relative) = std::str::from_utf8(&path) else {
                 self.issue(
                     DiagnosticKind::InvalidEncoding,
@@ -373,6 +398,7 @@ impl Finder<'_> {
                 );
                 continue;
             };
+
             let Some(root) = relative_path(base, relative) else {
                 self.issue(
                     DiagnosticKind::UnsupportedLayout,
@@ -381,9 +407,11 @@ impl Finder<'_> {
                 );
                 continue;
             };
+
             if self.excluded(&root) {
                 continue;
             }
+
             if !self.snapshot.files.contains_key(&root) {
                 if explicit {
                     self.issue(
@@ -394,6 +422,7 @@ impl Finder<'_> {
                 }
                 continue;
             }
+
             let target = format!("{}:{kind_name}", manifest_identity(manifest_path));
             self.visit(
                 root.clone(),
@@ -423,11 +452,13 @@ impl Finder<'_> {
         if self.excluded(&path) {
             return;
         }
+
         let key = SourceUnitKey {
             path: path.clone(),
             target: target.clone(),
             module: module.clone(),
         };
+
         if let Some((old_path, old_subtree)) = self.modules.get(&(target.clone(), module.clone())) {
             let message = format!(
                 "module {module} declared more than once (previous source {}, subtree {old_subtree:?})",
@@ -436,11 +467,14 @@ impl Finder<'_> {
             self.issue(DiagnosticKind::ModuleAmbiguity, &path, message);
             return;
         }
+
         self.modules
             .insert((target.clone(), module.clone()), (path.clone(), subtree));
+
         if !self.visited.insert(key.clone()) {
             return;
         }
+
         self.result.units.push(DiscoveredUnit {
             key,
             module: Some(module.clone()),
@@ -461,9 +495,11 @@ impl Finder<'_> {
             }
             active_files.push(path.clone());
         }
+
         let Some(file) = self.snapshot.files.get(&path) else {
             return;
         };
+
         if source(file).is_err() {
             self.issue(
                 DiagnosticKind::InvalidEncoding,
@@ -472,8 +508,10 @@ impl Finder<'_> {
             );
             return;
         }
+
         let bytes = &file.bytes;
         let mut parser = Parser::new();
+
         if parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .is_err()
@@ -485,6 +523,7 @@ impl Finder<'_> {
             );
             return;
         }
+
         let Some(tree) = parser.parse(bytes, None) else {
             self.issue(
                 DiagnosticKind::ParseError,
@@ -493,6 +532,7 @@ impl Finder<'_> {
             );
             return;
         };
+
         let root = tree.root_node();
         if crate::config::Config::current().include_test && root.has_error() {
             self.issue(
@@ -501,6 +541,7 @@ impl Finder<'_> {
                 "Rust source contains syntax errors",
             );
         }
+
         let body = match subtree {
             None => root,
             Some((start, end)) => {
@@ -526,10 +567,12 @@ impl Finder<'_> {
                 node
             }
         };
+
         let mut inherited_conditional = conditional;
         let mut inherited_unknown_attribute = unknown_attribute;
         let mut cursor = body.walk();
         let mut pending = Vec::new();
+
         for item in body.named_children(&mut cursor) {
             match item.kind() {
                 "attribute_item" => {
@@ -612,6 +655,7 @@ impl Finder<'_> {
             );
             return;
         };
+
         let Ok(name) = std::str::from_utf8(&bytes[name_node.byte_range()]) else {
             self.issue(
                 DiagnosticKind::InvalidEncoding,
@@ -620,8 +664,10 @@ impl Finder<'_> {
             );
             return;
         };
+
         let child_module = format!("{parent_module}::{name}");
         let mut path_attribute = None;
+
         for attr in attributes {
             match attribute_name(*attr, bytes) {
                 Some("path") => {
@@ -633,9 +679,11 @@ impl Finder<'_> {
                         );
                         return;
                     }
+
                     let Some(attribute) = attr.named_child(0) else {
                         continue;
                     };
+
                     let Some(value) = attribute.child_by_field_name("value") else {
                         self.issue(
                             DiagnosticKind::UnsupportedLayout,
@@ -644,6 +692,7 @@ impl Finder<'_> {
                         );
                         return;
                     };
+
                     let Some(path) = literal_path(&bytes[value.byte_range()]) else {
                         self.issue(
                             DiagnosticKind::UnsupportedLayout,
@@ -665,6 +714,7 @@ impl Finder<'_> {
                 _ => {}
             }
         }
+
         if let Some(body) = item.child_by_field_name("body") {
             if path_attribute.is_some() {
                 self.issue(
@@ -674,6 +724,7 @@ impl Finder<'_> {
                 );
                 return;
             }
+
             let inline_dir = append(directory, name);
             self.visit(
                 source_path.to_vec(),
@@ -687,6 +738,7 @@ impl Finder<'_> {
             );
             return;
         }
+
         let child = if let Some(attribute) = path_attribute {
             let Some(path) = relative_path(directory, &attribute) else {
                 self.issue(
@@ -700,6 +752,7 @@ impl Finder<'_> {
         } else {
             let direct = append(directory, &format!("{name}.rs"));
             let nested = append(directory, &format!("{name}/mod.rs"));
+
             match (
                 self.snapshot.files.contains_key(&direct),
                 self.snapshot.files.contains_key(&nested),
@@ -732,6 +785,7 @@ impl Finder<'_> {
                 }
             }
         };
+
         if !self.snapshot.files.contains_key(&child) {
             self.issue(
                 DiagnosticKind::UnsupportedLayout,
@@ -740,11 +794,13 @@ impl Finder<'_> {
             );
             return;
         }
+
         let child_dir = if child.ends_with(b"/mod.rs") {
             parent(&child).to_vec()
         } else {
             child.strip_suffix(b".rs").unwrap_or(&child).to_vec()
         };
+
         self.visit(
             child,
             target.to_owned(),
@@ -757,6 +813,7 @@ impl Finder<'_> {
         );
     }
 }
+
 fn uncertain_attribute(name: Option<&str>) -> bool {
     !matches!(
         name,
@@ -836,6 +893,7 @@ pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
     {
         return Discovery::default();
     }
+
     let mut finder = Finder {
         snapshot,
         result: Discovery::default(),
@@ -844,6 +902,7 @@ pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
         visited: BTreeSet::new(),
         modules: BTreeMap::new(),
     };
+
     let mut manifests = BTreeSet::new();
     if let Some(root) = finder.manifest(b"Cargo.toml") {
         manifests.insert(b"Cargo.toml".to_vec());
@@ -860,6 +919,7 @@ pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
                         );
                         continue;
                     };
+
                     if member.chars().any(|c| matches!(c, '*' | '?' | '[' | ']')) {
                         finder.issue(
                             DiagnosticKind::UnsupportedLayout,
@@ -868,6 +928,7 @@ pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
                         );
                         continue;
                     }
+
                     let Some(directory) = relative_path(b"", member) else {
                         finder.issue(
                             DiagnosticKind::UnsupportedLayout,
@@ -888,6 +949,7 @@ pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
         }
         finder.targets(b"Cargo.toml", &root);
     }
+
     for manifest in manifests
         .iter()
         .filter(|path| path.as_slice() != b"Cargo.toml")
@@ -896,6 +958,7 @@ pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
             finder.targets(manifest, &value);
         }
     }
+
     for path in snapshot.files.keys() {
         if path.ends_with(b"Cargo.toml") && path != b"Cargo.toml" && !manifests.contains(path) {
             finder.issue(
@@ -904,6 +967,7 @@ pub(super) fn discover(snapshot: &CapturedSnapshot) -> Discovery {
                 "Cargo manifest is not a literal root workspace member",
             );
         }
+
         if path.ends_with(b".rs")
             && !finder.excluded(path)
             && !finder.visited.iter().any(|key| &key.path == path)

@@ -14,6 +14,7 @@ pub struct GraphNode {
     pub symbol: Option<Symbol>,
     pub module_path: Option<Vec<u8>>,
 }
+
 #[derive(Debug, Clone)]
 pub struct CallRecord {
     pub id: String,
@@ -23,6 +24,7 @@ pub struct CallRecord {
     pub expression: String,
     pub source: SourceRef,
 }
+
 #[derive(Debug)]
 pub struct SnapshotGraph {
     pub role: SnapshotRole,
@@ -32,12 +34,14 @@ pub struct SnapshotGraph {
     pub module_ids: BTreeMap<SourceUnitKey, String>,
     pub calls: Vec<CallRecord>,
 }
+
 #[derive(Debug)]
 pub struct Impact {
     pub root: String,
     pub nodes: Vec<(String, usize)>,
     pub edges: Vec<(String, String)>,
 }
+
 pub type SymbolKey = (SourceUnitKey, LanguageId, String, String);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -67,12 +71,14 @@ pub struct EdgeComparison {
     pub native_to_view: BTreeMap<String, String>,
     pub changes: Vec<EdgeChange>,
 }
+
 fn role_code(role: SnapshotRole) -> &'static str {
     match role {
         SnapshotRole::Base => "b",
         SnapshotRole::Target => "t",
     }
 }
+
 fn caller_scope(file: &ParsedFile, scope_id: usize) -> usize {
     let mut current = Some(scope_id);
     while let Some(id) = current {
@@ -83,17 +89,21 @@ fn caller_scope(file: &ParsedFile, scope_id: usize) -> usize {
     }
     0
 }
+
 pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
     let mut graph: StableDiGraph<GraphNode, Vec<String>> = StableDiGraph::new();
     let mut ids = BTreeMap::new();
     let mut symbol_ids = BTreeMap::new();
     let mut module_ids = BTreeMap::new();
     let mut serial = 0usize;
+
     for (unit, file) in &snapshot.files {
         if !file.valid {
             continue;
         }
+
         let module_id = format!("m-{}-{serial:06}", role_code(snapshot.role));
+
         serial += 1;
         ids.insert(
             module_id.clone(),
@@ -103,6 +113,7 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
                 module_path: Some(unit.path.clone()),
             }),
         );
+
         module_ids.insert(unit.clone(), module_id);
         for symbol in &file.symbols {
             let id = format!("s-{}-{serial:06}", role_code(snapshot.role));
@@ -118,13 +129,16 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
             symbol_ids.insert((unit.clone(), symbol.scope_id), id);
         }
     }
+
     let resolver = ResolverRegistry::new(snapshot);
     let mut calls = Vec::new();
     let mut call_serial = 0usize;
+
     for (unit, file) in &snapshot.files {
         if !file.valid {
             continue;
         }
+
         for call in &file.calls {
             let owner_scope = caller_scope(file, call.scope_id);
             let caller = if owner_scope == 0 {
@@ -135,6 +149,7 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
                     .cloned()
                     .unwrap_or_else(|| module_ids[unit].clone())
             };
+
             let (target, reason) = match resolver.resolve(file, call) {
                 Resolution::Resolved(symbol) => (
                     symbol_ids
@@ -144,13 +159,16 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
                 ),
                 Resolution::Unresolved(reason) => (None, Some(reason)),
             };
+
             let reason = if target.is_none() {
                 reason.or(Some(UnresolvedReason::MissingTarget))
             } else {
                 None
             };
+
             let id = format!("c-{}-{call_serial:06}", role_code(snapshot.role));
             call_serial += 1;
+
             if let Some(target) = &target {
                 let from = ids[&caller];
                 let to = ids[target];
@@ -160,6 +178,7 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
                     graph.add_edge(from, to, vec![id.clone()]);
                 }
             }
+
             calls.push(CallRecord {
                 id,
                 caller,
@@ -170,9 +189,11 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
             });
         }
     }
+
     for edge in graph.edge_weights_mut() {
         edge.sort();
     }
+
     SnapshotGraph {
         role: snapshot.role,
         graph,
@@ -182,6 +203,7 @@ pub fn build(snapshot: &ExtractedSnapshot) -> SnapshotGraph {
         calls,
     }
 }
+
 pub fn callers(graph: &SnapshotGraph, root: &str, depth: usize) -> Impact {
     let Some(&root_idx) = graph.ids.get(root) else {
         return Impact {
@@ -190,15 +212,19 @@ pub fn callers(graph: &SnapshotGraph, root: &str, depth: usize) -> Impact {
             edges: Vec::new(),
         };
     };
+
     let mut distance = BTreeMap::new();
     let mut queue = VecDeque::new();
+
     distance.insert(root_idx, 0usize);
     queue.push_back(root_idx);
+
     while let Some(node) = queue.pop_front() {
         let d = distance[&node];
         if d >= depth {
             continue;
         }
+
         for caller in graph.graph.neighbors_directed(node, Incoming) {
             if let std::collections::btree_map::Entry::Vacant(entry) = distance.entry(caller) {
                 entry.insert(d + 1);
@@ -206,10 +232,12 @@ pub fn callers(graph: &SnapshotGraph, root: &str, depth: usize) -> Impact {
             }
         }
     }
+
     let mut nodes: Vec<_> = distance
         .iter()
         .map(|(idx, d)| (graph.graph[*idx].id.clone(), *d))
         .collect();
+
     nodes.sort();
     let known: BTreeSet<_> = distance.keys().copied().collect();
     let mut edges: Vec<_> = graph
@@ -223,6 +251,7 @@ pub fn callers(graph: &SnapshotGraph, root: &str, depth: usize) -> Impact {
             )
         })
         .collect();
+
     edges.sort();
     Impact {
         root: root.into(),
@@ -239,6 +268,7 @@ pub fn compare_edges(
 ) -> EdgeComparison {
     let mut groups: BTreeMap<SymbolKey, (Vec<String>, Vec<String>)> = BTreeMap::new();
     let mut keys = BTreeMap::new();
+
     for graph in [base, target] {
         for node in graph.graph.node_weights() {
             if let Some(symbol) = &node.symbol {
@@ -248,6 +278,7 @@ pub fn compare_edges(
                     symbol.qualified_name.clone(),
                     symbol.name.clone(),
                 );
+
                 let group = groups.entry(key).or_default();
                 match graph.role {
                     SnapshotRole::Base => group.0.push(node.id.clone()),
@@ -255,10 +286,12 @@ pub fn compare_edges(
                 }
             }
         }
+
         for (unit, id) in &graph.module_ids {
             keys.insert(id.clone(), EndpointIdentity::Module(unit.clone()));
         }
     }
+
     for (key, (before, after)) in groups {
         let ambiguous = before.len() > 1 || after.len() > 1;
         for (role, ids) in [(SnapshotRole::Base, before), (SnapshotRole::Target, after)] {
@@ -280,10 +313,12 @@ pub fn compare_edges(
         .enumerate()
         .map(|(index, key)| (key, format!("v-{index:06}")))
         .collect();
+
     let native_to_view: BTreeMap<_, _> = keys
         .iter()
         .map(|(id, key)| (id.clone(), view_ids[key].clone()))
         .collect();
+
     let invalid: BTreeSet<_> = base_source
         .files
         .iter()
@@ -291,6 +326,7 @@ pub fn compare_edges(
         .filter(|(_, file)| !file.valid)
         .map(|(unit, _)| unit.clone())
         .collect();
+
     let pairs = |graph: &SnapshotGraph| {
         let mut pairs = BTreeMap::new();
         for edge in graph.graph.edge_references() {
@@ -302,6 +338,7 @@ pub fn compare_edges(
                 }
                 EndpointIdentity::Ambiguous(..) => false,
             };
+
             if eligible(caller) && eligible(callee) {
                 pairs.insert(
                     (
@@ -314,9 +351,11 @@ pub fn compare_edges(
         }
         pairs
     };
+
     let before = pairs(base);
     let after = pairs(target);
     let mut changes = Vec::new();
+
     for ((caller_view, callee_view), pair) in &before {
         if !after.contains_key(&(caller_view.clone(), callee_view.clone())) {
             changes.push(EdgeChange {
@@ -328,6 +367,7 @@ pub fn compare_edges(
             });
         }
     }
+
     for ((caller_view, callee_view), pair) in &after {
         if !before.contains_key(&(caller_view.clone(), callee_view.clone())) {
             changes.push(EdgeChange {
@@ -339,9 +379,11 @@ pub fn compare_edges(
             });
         }
     }
+
     changes.sort_by(|a, b| {
         (&a.caller_view, &a.callee_view, a.kind).cmp(&(&b.caller_view, &b.callee_view, b.kind))
     });
+
     EdgeComparison {
         native_to_view,
         changes,
@@ -357,21 +399,27 @@ pub fn call_retargets_covered(
 ) -> bool {
     let before = base.calls.iter().filter(|call| call.caller == before_id);
     let after = target.calls.iter().filter(|call| call.caller == after_id);
+
     if before.clone().count() != after.clone().count() {
         return false;
     }
+
     let mut differing = false;
     let caller_view = &comparison.native_to_view[before_id];
+
     for (old, new) in before.zip(after) {
         if old.expression == new.expression {
             continue;
         }
+
         differing = true;
         let (Some(old_target), Some(new_target)) = (&old.target, &new.target) else {
             return false;
         };
+
         let old_view = &comparison.native_to_view[old_target];
         let new_view = &comparison.native_to_view[new_target];
+
         if old_view == new_view
             || !comparison.changes.iter().any(|change| {
                 change.kind == EdgeChangeKind::Deleted
