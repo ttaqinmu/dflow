@@ -30,62 +30,6 @@ fn run(dir: &TempDir, args: &[&str]) -> (std::process::Output, Value) {
 }
 
 #[test]
-fn profiling_keeps_report_bytes_and_records_all_pipeline_stages() {
-    let dir = TempDir::new().unwrap();
-    let repo = Repository::init(dir.path()).unwrap();
-    fs::write(dir.path().join("a.py"), "def f(): return 1\n").unwrap();
-    commit(&repo, &["a.py"]);
-    fs::write(dir.path().join("a.py"), "def f(): return 2\n").unwrap();
-    let profile_path = dir.path().join("profile.json");
-
-    let (normal, _) = run(&dir, &["local", "--format", "json"]);
-    let (profiled, report) = run(
-        &dir,
-        &["local", "--profile-json", profile_path.to_str().unwrap()],
-    );
-    assert_eq!(profiled.status.code(), Some(0));
-    assert_eq!(normal.stdout, profiled.stdout);
-    assert!(profiled.stderr.is_empty());
-
-    let profile: Value = serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
-    assert_eq!(profile["schema_version"], 1);
-    assert_eq!(profile["complete"], report["complete"]);
-    assert_eq!(
-        profile["counts"]["symbols"],
-        report["symbols"].as_array().unwrap().len()
-    );
-    let stages = profile["stages"].as_array().unwrap();
-    assert_eq!(stages.len(), 12);
-    for stage in stages {
-        assert!(stage["name"].is_string());
-        assert!(stage["duration_ns"].is_u64());
-    }
-
-    fs::write(dir.path().join("a.py"), "def f(:\n").unwrap();
-    let (partial, partial_report) = run(
-        &dir,
-        &["local", "--profile-json", profile_path.to_str().unwrap()],
-    );
-    assert_eq!(partial.status.code(), Some(1));
-    assert_eq!(partial_report["complete"], false);
-    let partial_profile: Value = serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
-    assert_eq!(partial_profile["complete"], false);
-
-    let invalid = Command::new(env!("CARGO_BIN_EXE_dflow"))
-        .current_dir(dir.path())
-        .args([
-            "local",
-            "--format",
-            "mermaid",
-            "--profile-json",
-            profile_path.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert_eq!(invalid.status.code(), Some(2));
-}
-
-#[test]
 fn include_test_flag_controls_test_source_capture() {
     let dir = TempDir::new().unwrap();
     Repository::init(dir.path()).unwrap();

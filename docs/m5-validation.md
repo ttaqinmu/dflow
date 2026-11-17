@@ -8,7 +8,7 @@ Rust analysis uses captured repository bytes, `tree-sitter-rust` 0.24.2 with Tre
 
 ## Generated benchmark
 
-Run `python3 scripts/benchmark_m5.py` after building the debug binary. Machine: Intel Core i7-12700F, x86_64 Linux 6.18.55-1-MANJARO (glibc 2.44), Rust 1.93.1. Each generated repository contains one Rust function per source file, one modified root, a two-function cycle and full caller chain. Three debug-binary local JSON runs per size use depth equal to file count; Linux `wait4` measures per-child peak RSS. Times are medians including process startup. The fixture oracle checks every reported resolved caller→callee pair (precision) and counts known resolvable pairs found (coverage), across both snapshots.
+Historical measurements used a debug binary on an Intel Core i7-12700F, x86_64 Linux 6.18.55-1-MANJARO (glibc 2.44), Rust 1.93.1. Each generated repository had one Rust function per source file, one modified root, a two-function cycle and full caller chain. Three local JSON runs per size used depth equal to file count; Linux `wait4` measured per-child peak RSS. Times are medians including process startup. The fixture oracle checked every reported resolved caller→callee pair (precision) and counted known resolvable pairs found (coverage), across both snapshots. The one-off benchmark runner has been removed; use [Flamegraph](performance-profiling.md) for current CPU profiling.
 
 | Rust files | Symbols | Resolved edges | Impact nodes | Oracle pairs found | Precision | Coverage | Median elapsed | Max child RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

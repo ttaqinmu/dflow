@@ -8,7 +8,7 @@ Run `cargo build` followed by `python3 scripts/validate_tui_pty.py`. On Linux, t
 
 ## Generated benchmark baseline
 
-Run `python3 scripts/benchmark_m4.py` after building the debug binary. Reference environment: Intel Core i7-12700F, x86_64 Linux, Rust 1.93.1, Tree-sitter 0.25.10, tree-sitter-python 0.25.0. Each generated repository has one function per Python file, one modified root, a two-function cycle, and a caller chain reaching every function. Three local JSON runs used `--depth` equal to the file count. Times are median wall-clock seconds including process startup; peak RSS is measured for each DFlow process with Linux `wait4`.
+Historical measurements used a debug binary on an Intel Core i7-12700F, x86_64 Linux, Rust 1.93.1, Tree-sitter 0.25.10, and tree-sitter-python 0.25.0. Each generated repository had one function per Python file, one modified root, a two-function cycle, and a caller chain reaching every function. Three local JSON runs used `--depth` equal to the file count. Times are median wall-clock seconds including process startup; peak RSS was measured for each DFlow process with Linux `wait4`. The one-off benchmark runner has been removed; use [Flamegraph](performance-profiling.md) for current CPU profiling.
 
 | Files | Symbols across two snapshots | Edges across two snapshots | Focused impact nodes | Median elapsed | Max child RSS |
 | ---: | ---: | ---: | ---: | ---: | ---: |

@@ -62,8 +62,6 @@ pub struct AnalyzeOptions {
     pub format: Option<OutputFormat>,
     #[arg(long, value_enum, conflicts_with = "format")]
     pub render: Option<RenderTarget>,
-    #[arg(long, value_name = "PATH", conflicts_with = "render")]
-    pub profile_json: Option<std::path::PathBuf>,
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32))]
     pub depth: u32,
 }
@@ -94,23 +92,11 @@ impl AnalyzeOptions {
         stdin_tty: bool,
         stdout_tty: bool,
     ) -> Result<OutputTarget, &'static str> {
-        if self.profile_json.is_some()
-            && self
-                .format
-                .is_some_and(|format| !matches!(format, OutputFormat::Json))
-        {
-            return Err("--profile-json requires --format json (or no format)");
-        }
         let target = match (self.render, self.format) {
             (Some(render), _) => OutputTarget::Render(render),
             (_, Some(OutputFormat::Tui)) => OutputTarget::Render(RenderTarget::Tui),
             (_, Some(format)) => OutputTarget::Format(format),
-            (None, None)
-                if self.profile_json.is_none()
-                    && cfg!(feature = "tui")
-                    && stdin_tty
-                    && stdout_tty =>
-            {
+            (None, None) if cfg!(feature = "tui") && stdin_tty && stdout_tty => {
                 OutputTarget::Render(RenderTarget::Tui)
             }
             (None, None) => OutputTarget::Format(OutputFormat::Json),
